@@ -450,9 +450,9 @@ async fn ping(State(app): State<App>) -> StatusCode {
     status(app.engine.workers_now().health()).1
 }
 
-/// The server's version, and libpktito's (its PKTITO_VERSION)
+/// The server's version, and libpktito's
 async fn version() -> Json<Value> {
-    Json(json!({ "version": env!("CARGO_PKG_VERSION"), "libpktito": env!("PKTITO_VERSION") }))
+    Json(json!({ "version": env!("CARGO_PKG_VERSION"), "libpktito": ffi::version() }))
 }
 
 async fn prometheus(State(app): State<App>) -> Response {

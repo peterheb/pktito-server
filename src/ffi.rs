@@ -51,6 +51,7 @@ struct PkChunkOut {
     retried: c_int,
     done: i64,
     total: i64,
+    at_frame: i32,
 }
 
 #[repr(C)]
@@ -159,10 +160,11 @@ extern "C" {
     fn pk_words(m: *const PkModel, t: *const PkTok, n: usize, out: *mut PkWord) -> usize;
     fn pk_backend() -> *const c_char;
     fn pk_compiler() -> *const c_char;
+    fn pk_version() -> *const c_char;
     fn pk_seg_defaults(p: *mut PkSegParams);
     fn pk_asr_speech(a: *mut PkAsr, x: *const f32, n: usize, p: *const PkSegParams, out: *mut PkSeg,
                      cap: usize) -> c_long;
-    fn pk_captions(w: *const PkCapword, n: usize, english: c_int, media_end: i64, out: *mut PkCue) -> c_long;
+    fn pk_captions(w: *const PkCapword, n: usize, lang: *const c_char, media_end: i64, out: *mut PkCue) -> c_long;
     fn pk_language(w: *const PkCapword, n: usize) -> *const c_char;
     fn pk_sentences(m: *const PkModel, t: *const PkTok, n: usize, lang: *const c_char, done: c_int,
                     out: *mut PkSentence) -> c_long;
@@ -194,6 +196,11 @@ pub fn message(err: &[c_char]) -> String {
 /// The backend the library was built with, and the compiler that built it
 pub fn backend() -> (String, String) {
     unsafe { (owned(pk_backend()), owned(pk_compiler())) }
+}
+
+/// The library's version (PKTITO_VERSION)
+pub fn version() -> String {
+    unsafe { owned(pk_version()) }
 }
 
 /// A loaded .pkf: the recognizer, its vocabulary and Silero's VAD
@@ -377,6 +384,9 @@ pub struct Chunk {
     pub at: PkSeg,
     pub toks: Vec<PkTok>,
     pub retried: i32,
+    /// at.start in frames: a token's frame plus this counts from the
+    /// recording's start
+    pub at_frame: i32,
 }
 
 /// pk_steps said -1: memory ran out, or a job came back that it did not
@@ -440,6 +450,7 @@ impl Steps {
             retried: 0,
             done: 0,
             total: 0,
+            at_frame: 0,
         };
         match unsafe { pk_steps_take(self.ptr, &mut c) } {
             1 => {
@@ -448,7 +459,7 @@ impl Steps {
                 } else {
                     Vec::new()
                 };
-                Ok(Some(Chunk { i: c.i, n: c.n, at: c.at, toks, retried: c.retried }))
+                Ok(Some(Chunk { i: c.i, n: c.n, at: c.at, toks, retried: c.retried, at_frame: c.at_frame }))
             }
             0 => Ok(None),
             _ => Err(StepsFailed),
@@ -462,16 +473,18 @@ impl Drop for Steps {
     }
 }
 
-/// Subtitle cues of words in order (pk_captions): english 1, 0, or -1 for
-/// "if pk_language finds them English". None if memory runs out.
-pub fn captions(texts: &[CString], times: &[(i64, i64)], english: i32, media_end: i64) -> Option<Vec<PkCue>> {
+/// Subtitle cues of words in order (pk_captions), in lang, a two-letter
+/// code: "en" adds the English rules. None if memory runs out.
+pub fn captions(texts: &[CString], times: &[(i64, i64)], lang: Option<&str>, media_end: i64) -> Option<Vec<PkCue>> {
     let w: Vec<PkCapword> = texts
         .iter()
         .zip(times)
         .map(|(t, &(start, end))| PkCapword { text: t.as_ptr(), start, end })
         .collect();
     let mut out = vec![PkCue::default(); w.len().max(1)];
-    let n = unsafe { pk_captions(w.as_ptr(), w.len(), english, media_end, out.as_mut_ptr()) };
+    let lang = lang.map(|l| CString::new(l).unwrap_or_default());
+    let lang = lang.as_ref().map_or(std::ptr::null(), |l| l.as_ptr());
+    let n = unsafe { pk_captions(w.as_ptr(), w.len(), lang, media_end, out.as_mut_ptr()) };
     if n < 0 {
         return None;
     }

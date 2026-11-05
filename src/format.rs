@@ -61,8 +61,7 @@ pub fn heard(m: &Model, c: &Chunk) -> Heard {
             end: start + (t.frame + t.dur) as f64 * fs,
         })
         .collect();
-    let base = (c.at.start as f64 / (rate * fs)).round() as i32;
-    let toks = c.toks.iter().map(|t| PkTok { frame: t.frame + base, ..*t }).collect();
+    let toks = c.toks.iter().map(|t| PkTok { frame: t.frame + c.at_frame, ..*t }).collect();
     Heard { start, end: c.at.end as f64 / rate, retried: c.retried, text: m.text(&c.toks), words, tokens, toks }
 }
 
@@ -177,8 +176,7 @@ pub fn subtitles(t: &Transcript, vtt: bool) -> Option<String> {
     let texts: Vec<CString> = t.words().map(|w| cstring(&w.text)).collect();
     let times: Vec<(i64, i64)> =
         t.words().map(|w| ((w.start * 1000.0).round() as i64, (w.end * 1000.0).round() as i64)).collect();
-    let english = if t.model.english { 1 } else { -1 };
-    let cues = ffi::captions(&texts, &times, english, t.samples as i64 * 1000 / t.model.rate as i64)?;
+    let cues = ffi::captions(&texts, &times, t.language().as_deref(), t.samples as i64 * 1000 / t.model.rate as i64)?;
     let words: Vec<&Word> = t.words().collect();
     let sep = if vtt { '.' } else { ',' };
     let mut s = String::from(if vtt { "WEBVTT\n\n" } else { "" });

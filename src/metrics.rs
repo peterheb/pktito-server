@@ -108,8 +108,8 @@ pub fn page(e: &Engine, http: &Http) -> String {
     let backend = backend.split(' ').next().unwrap_or_default(); // its name, "avx2 (x86-64 ...)"'s avx2
     let mut p = Page::default();
     p.family("pktito:server_info", "gauge", "The server's version, libpktito's, and the backend and compiler of its kernels");
-    let version = env!("CARGO_PKG_VERSION");
-    let info = [("version", version), ("libpktito", env!("PKTITO_VERSION")), ("backend", backend), ("compiler", &compiler)];
+    let libpktito = ffi::version();
+    let info = [("version", env!("CARGO_PKG_VERSION")), ("libpktito", &libpktito), ("backend", backend), ("compiler", &compiler)];
     p.sample("pktito:server_info", &info, 1);
     p.family("process_start_time_seconds", "gauge", "Unix time the server started");
     p.sample("process_start_time_seconds", &[], http.started.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()));
