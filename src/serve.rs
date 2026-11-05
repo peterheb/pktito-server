@@ -35,7 +35,14 @@ pub async fn serve(listener: TcpListener, app: Router, headers: Duration, stall:
         let tcp = match listener.accept().await {
             Ok((tcp, _)) => tcp,
             // a connection gone before it was taken: the next
-            Err(e) if matches!(e.kind(), ErrorKind::ConnectionAborted | ErrorKind::ConnectionRefused | ErrorKind::ConnectionReset) => {
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    ErrorKind::ConnectionAborted
+                        | ErrorKind::ConnectionRefused
+                        | ErrorKind::ConnectionReset
+                ) =>
+            {
                 continue
             }
             // out of descriptors, most likely: as axum::serve does, a
@@ -49,7 +56,13 @@ pub async fn serve(listener: TcpListener, app: Router, headers: Duration, stall:
         let app = app.clone();
         tokio::spawn(async move {
             let service = hyper::service::service_fn(move |req: hyper::Request<Incoming>| {
-                app.clone().oneshot(req.map(|body| Body::new(Idle { body, after: stall, sleep: None })))
+                app.clone().oneshot(req.map(|body| {
+                    Body::new(Idle {
+                        body,
+                        after: stall,
+                        sleep: None,
+                    })
+                }))
             });
             let conn = http1::Builder::new()
                 .timer(TokioTimer::new())
@@ -80,7 +93,11 @@ pub struct Stalled(pub Duration);
 
 impl std::fmt::Display for Stalled {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "the upload stopped: no bytes of it for {} s", self.0.as_secs())
+        write!(
+            f,
+            "the upload stopped: no bytes of it for {} s",
+            self.0.as_secs()
+        )
     }
 }
 
@@ -90,14 +107,19 @@ impl hyper::body::Body for Idle {
     type Data = Bytes;
     type Error = Box<dyn std::error::Error + Send + Sync>;
 
-    fn poll_frame(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
         let me = self.get_mut();
         if let Poll::Ready(frame) = Pin::new(&mut me.body).poll_frame(cx) {
-            me.sleep = None;                // bytes, or the end: the wait starts again
+            me.sleep = None; // bytes, or the end: the wait starts again
             return Poll::Ready(frame.map(|f| f.map_err(Into::into)));
         }
         let after = me.after;
-        let sleep = me.sleep.get_or_insert_with(|| Box::pin(tokio::time::sleep(after)));
+        let sleep = me
+            .sleep
+            .get_or_insert_with(|| Box::pin(tokio::time::sleep(after)));
         match sleep.as_mut().poll(cx) {
             Poll::Ready(()) => Poll::Ready(Some(Err(Box::new(Stalled(after))))),
             Poll::Pending => Poll::Pending,

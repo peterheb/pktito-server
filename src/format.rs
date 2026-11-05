@@ -61,8 +61,23 @@ pub fn heard(m: &Model, c: &Chunk) -> Heard {
             end: start + (t.frame + t.dur) as f64 * fs,
         })
         .collect();
-    let toks = c.toks.iter().map(|t| PkTok { frame: t.frame + c.at_frame, ..*t }).collect();
-    Heard { start, end: c.at.end as f64 / rate, retried: c.retried, text: m.text(&c.toks), words, tokens, toks }
+    let toks = c
+        .toks
+        .iter()
+        .map(|t| PkTok {
+            frame: t.frame + c.at_frame,
+            ..*t
+        })
+        .collect();
+    Heard {
+        start,
+        end: c.at.end as f64 / rate,
+        retried: c.retried,
+        text: m.text(&c.toks),
+        words,
+        tokens,
+        toks,
+    }
 }
 
 /// A recording's transcript, its chunks in order
@@ -81,7 +96,12 @@ impl Transcript<'_> {
 
     /// The chunks' texts, a space between them
     pub fn text(&self) -> String {
-        let texts: Vec<&str> = self.chunks.iter().map(|c| c.text.as_str()).filter(|t| !t.is_empty()).collect();
+        let texts: Vec<&str> = self
+            .chunks
+            .iter()
+            .map(|c| c.text.as_str())
+            .filter(|t| !t.is_empty())
+            .collect();
         texts.join(" ")
     }
 
@@ -101,7 +121,7 @@ impl Transcript<'_> {
 }
 
 fn cstring(s: &str) -> CString {
-    CString::new(s).unwrap_or_default()             // a word's text holds no NUL
+    CString::new(s).unwrap_or_default() // a word's text holds no NUL
 }
 
 /// printf's %.*f: Rust's {:.*} rounds a value's exact binary expansion to
@@ -134,7 +154,13 @@ fn json_str(s: &mut String, t: &str) {
 pub fn pktito_json(t: &Transcript) -> String {
     let mut s = String::from("{\"chunks\": [");
     for (i, c) in t.chunks.iter().enumerate() {
-        let _ = write!(s, "{}\n {{\"start\": {}, \"end\": {}, ", if i > 0 { "," } else { "" }, fixed(c.start, 3), fixed(c.end, 3));
+        let _ = write!(
+            s,
+            "{}\n {{\"start\": {}, \"end\": {}, ",
+            if i > 0 { "," } else { "" },
+            fixed(c.start, 3),
+            fixed(c.end, 3)
+        );
         if c.retried != 0 {
             let _ = write!(s, "\"retried\": {}, ", c.retried);
         }
@@ -142,15 +168,34 @@ pub fn pktito_json(t: &Transcript) -> String {
         json_str(&mut s, &c.text);
         s.push_str(", \"words\": [");
         for (k, w) in c.words.iter().enumerate() {
-            s.push_str(if k > 0 { ", {\"word\": " } else { "{\"word\": " });
+            s.push_str(if k > 0 {
+                ", {\"word\": "
+            } else {
+                "{\"word\": "
+            });
             json_str(&mut s, &w.text);
-            let _ = write!(s, ", \"start\": {}, \"end\": {}}}", fixed(w.start, 2), fixed(w.end, 2));
+            let _ = write!(
+                s,
+                ", \"start\": {}, \"end\": {}}}",
+                fixed(w.start, 2),
+                fixed(w.end, 2)
+            );
         }
         s.push_str("], \"tokens\": [");
         for (k, tk) in c.tokens.iter().enumerate() {
-            let _ = write!(s, "{}{{\"id\": {}, \"piece\": ", if k > 0 { ", " } else { "" }, tk.id);
+            let _ = write!(
+                s,
+                "{}{{\"id\": {}, \"piece\": ",
+                if k > 0 { ", " } else { "" },
+                tk.id
+            );
             json_str(&mut s, &tk.piece);
-            let _ = write!(s, ", \"start\": {}, \"end\": {}}}", fixed(tk.start, 2), fixed(tk.end, 2));
+            let _ = write!(
+                s,
+                ", \"start\": {}, \"end\": {}}}",
+                fixed(tk.start, 2),
+                fixed(tk.end, 2)
+            );
         }
         s.push_str("]}");
     }
@@ -167,16 +212,35 @@ pub fn pktito_json(t: &Transcript) -> String {
 }
 
 fn sub_time(s: &mut String, ms: i64, sep: char) {
-    let _ = write!(s, "{:02}:{:02}:{:02}{sep}{:03}", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60, ms % 1000);
+    let _ = write!(
+        s,
+        "{:02}:{:02}:{:02}{sep}{:03}",
+        ms / 3_600_000,
+        ms / 60_000 % 60,
+        ms / 1000 % 60,
+        ms % 1000
+    );
 }
 
 /// pktito-c --srt or --vtt: pk_captions' cues of every word. None if
 /// memory runs out.
 pub fn subtitles(t: &Transcript, vtt: bool) -> Option<String> {
     let texts: Vec<CString> = t.words().map(|w| cstring(&w.text)).collect();
-    let times: Vec<(i64, i64)> =
-        t.words().map(|w| ((w.start * 1000.0).round() as i64, (w.end * 1000.0).round() as i64)).collect();
-    let cues = ffi::captions(&texts, &times, t.language().as_deref(), t.samples as i64 * 1000 / t.model.rate as i64)?;
+    let times: Vec<(i64, i64)> = t
+        .words()
+        .map(|w| {
+            (
+                (w.start * 1000.0).round() as i64,
+                (w.end * 1000.0).round() as i64,
+            )
+        })
+        .collect();
+    let cues = ffi::captions(
+        &texts,
+        &times,
+        t.language().as_deref(),
+        t.samples as i64 * 1000 / t.model.rate as i64,
+    )?;
     let words: Vec<&Word> = t.words().collect();
     let sep = if vtt { '.' } else { ',' };
     let mut s = String::from(if vtt { "WEBVTT\n\n" } else { "" });
@@ -193,12 +257,20 @@ pub fn subtitles(t: &Transcript, vtt: bool) -> Option<String> {
             let w = &words[i as usize].text;
             if vtt {
                 // WebVTT reads & < > as markup
-                s.push_str(&w.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;"));
+                s.push_str(
+                    &w.replace('&', "&amp;")
+                        .replace('<', "&lt;")
+                        .replace('>', "&gt;"),
+                );
             } else {
                 s.push_str(w);
             }
         }
-        s.push_str(if cue.flags & PK_CUE_PAUSE != 0 { "\u{2026}\n\n" } else { "\n\n" });
+        s.push_str(if cue.flags & PK_CUE_PAUSE != 0 {
+            "\u{2026}\n\n"
+        } else {
+            "\n\n"
+        });
     }
     Some(s)
 }
@@ -259,7 +331,11 @@ pub fn verbose_json(t: &Transcript, segments: bool, words: bool) -> Option<Value
         "text": t.text(),
     });
     if segments {
-        let toks: Vec<PkTok> = t.chunks.iter().flat_map(|c| c.toks.iter().copied()).collect();
+        let toks: Vec<PkTok> = t
+            .chunks
+            .iter()
+            .flat_map(|c| c.toks.iter().copied())
+            .collect();
         let times: Vec<&Token> = t.chunks.iter().flat_map(|c| c.tokens.iter()).collect();
         let segs: Vec<Value> = t
             .model
@@ -297,7 +373,13 @@ mod tests {
         let mut buf = [0u8; 64];
         let fmt = c"%.*f";
         let n = unsafe {
-            libc::snprintf(buf.as_mut_ptr() as *mut libc::c_char, buf.len(), fmt.as_ptr(), places as libc::c_int, x)
+            libc::snprintf(
+                buf.as_mut_ptr() as *mut libc::c_char,
+                buf.len(),
+                fmt.as_ptr(),
+                places as libc::c_int,
+                x,
+            )
         };
         String::from_utf8(buf[..n as usize].to_vec()).unwrap()
     }
@@ -309,7 +391,11 @@ mod tests {
     fn fixed_is_printf() {
         let check = |x: f64| {
             for places in [2, 3] {
-                assert_eq!(fixed(x, places), snprintf(x, places), "{x:e} to {places} places");
+                assert_eq!(
+                    fixed(x, places),
+                    snprintf(x, places),
+                    "{x:e} to {places} places"
+                );
             }
         };
         for s in (0..16000 * 600).step_by(31) {

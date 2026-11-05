@@ -19,6 +19,7 @@ server runs, with nothing else busy, and say the server's -t and -w with it.
 The server reads the FLACs through its ffmpeg (--ffmpeg PATH).
 Stdlib only.
 """
+
 import argparse
 import collections
 import concurrent.futures
@@ -36,18 +37,54 @@ BASE = "https://models.pktito.net/alicebench/v1"
 # name and SHA-256, as pktito-app's scripts/alicebench.sh has them since the
 # FLACs' 4,096-sample blocks (2026-10-25; the samples unchanged)
 CHAPTERS = [
-    ("wonderland_ch_01.flac", "ad3326f63b5371090294c38a80467dcd288bc309b9def8547c550429844b6a31"),
-    ("wonderland_ch_02.flac", "7507934bbf636c7ef5a3089eba6f5aec3848528ac1150b987ad80840472c3f97"),
-    ("wonderland_ch_03.flac", "919e8f75289091fce57dde9c0e1947132ad42e88095b8921696d0a3fccd0e50d"),
-    ("wonderland_ch_04.flac", "f575db797db9a0db3af94f1a560b191fcd485e9cc212c19da4ebdf9f2af8e20e"),
-    ("wonderland_ch_05.flac", "57d3ec5801fd93782f8d5e6f193a45f11f06ffb5e8358c88b9aecf5bbb2780b5"),
-    ("wonderland_ch_06.flac", "cffb9569b7e875e2588bcd92c0fcc38bdb15be232595d54a57c25ca5fcc6133f"),
-    ("wonderland_ch_07.flac", "59fbba17032e80ae188837a4f77b399fa97817597bf57925952f28e3cd7c731a"),
-    ("wonderland_ch_08.flac", "e47086d07d2f7e73488550531b2eb4c7e20c7761e806a68f0f544a5dc8d51d5a"),
-    ("wonderland_ch_09.flac", "a0ec98e0bcb2cc84502faaffdcede67d309f27cc846d8ec18b00160c4c322f0e"),
-    ("wonderland_ch_10.flac", "463975d3aaedb928618ef1b16bb4ede8640c4a75d0d92b209fcc9c8bd6832aa5"),
-    ("wonderland_ch_11.flac", "6ef258f362737f4976e06713624dde9aff46a8a72728a5ecf2c70ef907384f59"),
-    ("wonderland_ch_12.flac", "922986f0c8f45fe6465daf990b832d664f24b8fdc159c45082ea449abac64ff9"),
+    (
+        "wonderland_ch_01.flac",
+        "ad3326f63b5371090294c38a80467dcd288bc309b9def8547c550429844b6a31",
+    ),
+    (
+        "wonderland_ch_02.flac",
+        "7507934bbf636c7ef5a3089eba6f5aec3848528ac1150b987ad80840472c3f97",
+    ),
+    (
+        "wonderland_ch_03.flac",
+        "919e8f75289091fce57dde9c0e1947132ad42e88095b8921696d0a3fccd0e50d",
+    ),
+    (
+        "wonderland_ch_04.flac",
+        "f575db797db9a0db3af94f1a560b191fcd485e9cc212c19da4ebdf9f2af8e20e",
+    ),
+    (
+        "wonderland_ch_05.flac",
+        "57d3ec5801fd93782f8d5e6f193a45f11f06ffb5e8358c88b9aecf5bbb2780b5",
+    ),
+    (
+        "wonderland_ch_06.flac",
+        "cffb9569b7e875e2588bcd92c0fcc38bdb15be232595d54a57c25ca5fcc6133f",
+    ),
+    (
+        "wonderland_ch_07.flac",
+        "59fbba17032e80ae188837a4f77b399fa97817597bf57925952f28e3cd7c731a",
+    ),
+    (
+        "wonderland_ch_08.flac",
+        "e47086d07d2f7e73488550531b2eb4c7e20c7761e806a68f0f544a5dc8d51d5a",
+    ),
+    (
+        "wonderland_ch_09.flac",
+        "a0ec98e0bcb2cc84502faaffdcede67d309f27cc846d8ec18b00160c4c322f0e",
+    ),
+    (
+        "wonderland_ch_10.flac",
+        "463975d3aaedb928618ef1b16bb4ede8640c4a75d0d92b209fcc9c8bd6832aa5",
+    ),
+    (
+        "wonderland_ch_11.flac",
+        "6ef258f362737f4976e06713624dde9aff46a8a72728a5ecf2c70ef907384f59",
+    ),
+    (
+        "wonderland_ch_12.flac",
+        "922986f0c8f45fe6465daf990b832d664f24b8fdc159c45082ea449abac64ff9",
+    ),
 ]
 
 
@@ -67,7 +104,10 @@ def fetch(folder):
             continue
         print(f"bench: downloading {name}", file=sys.stderr)
         part = path + ".part"
-        with urllib.request.urlopen(f"{BASE}/{name}", timeout=60) as r, open(part, "wb") as out:
+        with (
+            urllib.request.urlopen(f"{BASE}/{name}", timeout=60) as r,
+            open(part, "wb") as out,
+        ):
             while block := r.read(1 << 20):
                 out.write(block)
         if sha256(part) != want:
@@ -102,14 +142,18 @@ def post(url, path, key):
     boundary = uuid.uuid4().hex
     with open(path, "rb") as f:
         audio = f.read()
-    body = b"".join([
-        f"--{boundary}\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\npktito_json\r\n".encode(),
-        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{os.path.basename(path)}\"\r\n"
-        "Content-Type: audio/flac\r\n\r\n".encode(),
-        audio,
-        f"\r\n--{boundary}--\r\n".encode(),
-    ])
-    req = urllib.request.Request(f"{url}/v1/audio/transcriptions", data=body, method="POST")
+    body = b"".join(
+        [
+            f'--{boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\npktito_json\r\n'.encode(),
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{os.path.basename(path)}"\r\n'
+            "Content-Type: audio/flac\r\n\r\n".encode(),
+            audio,
+            f"\r\n--{boundary}--\r\n".encode(),
+        ]
+    )
+    req = urllib.request.Request(
+        f"{url}/v1/audio/transcriptions", data=body, method="POST"
+    )
     req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
     if key:
         req.add_header("Authorization", f"Bearer {key}")
@@ -129,7 +173,9 @@ def main():
     ap.add_argument("--at-once", type=int, default=4, help="requests in flight (4)")
     ap.add_argument("--dir", default=os.path.expanduser("~/.cache/alicebench-v1"))
     ap.add_argument("--key", default=os.environ.get("PKTITO_API_KEY"))
-    ap.add_argument("--save", metavar="DIR", help="each chapter's answer into DIR/NAME.json")
+    ap.add_argument(
+        "--save", metavar="DIR", help="each chapter's answer into DIR/NAME.json"
+    )
     a = ap.parse_args()
     url = a.url.rstrip("/")
 
@@ -141,8 +187,10 @@ def main():
             models = [m["id"] for m in json.load(r)["data"]]
     except (OSError, ValueError, KeyError) as e:
         sys.exit(f"bench: no pktito-server at {url}: {e}")
-    print(f"server {url}, model {models[0]}; {len(paths)} chapters, "
-          f"{sum(seconds.values()) / 3600:.2f} h of audio a pass, {a.passes} passes, {a.at_once} at once")
+    print(
+        f"server {url}, model {models[0]}; {len(paths)} chapters, "
+        f"{sum(seconds.values()) / 3600:.2f} h of audio a pass, {a.passes} passes, {a.at_once} at once"
+    )
 
     shortest = min(paths, key=seconds.get)
     status, _, t0, t1 = post(url, shortest, a.key)
@@ -175,17 +223,26 @@ def main():
     # away (503), and the 16 answered made 1295.7x (c8a.24xlarge, 2026-11-04)
     if failed:
         statuses = ", ".join(f"{status}: {n}" for status, n in sorted(failed.items()))
-        print(f"{len(done)} requests, {sum(failed.values())} not 200 ({statuses}): no figure")
+        print(
+            f"{len(done)} requests, {sum(failed.values())} not 200 ({statuses}): no figure"
+        )
         print(f"the first said: {message(why)}")
         return 1
     audio = sum(seconds[p] for _, p in jobs)
-    print(f"{len(done)} requests, all 200, in {wall:.1f} s: "
-          f"{audio / 3600:.2f} h of audio, {audio / wall:.1f}x real time")
-    print(f"a request's time over its audio's: median {statistics.median(took):.4f}, "
-          f"longest {max(took):.4f} (with {a.at_once} sharing the server)")
+    print(
+        f"{len(done)} requests, all 200, in {wall:.1f} s: "
+        f"{audio / 3600:.2f} h of audio, {audio / wall:.1f}x real time"
+    )
+    print(
+        f"a request's time over its audio's: median {statistics.median(took):.4f}, "
+        f"longest {max(took):.4f} (with {a.at_once} sharing the server)"
+    )
     varied = [os.path.basename(p) for p, h in answers.items() if len(h) > 1]
-    print("each chapter's answer the same bytes every pass" if not varied
-          else f"answers that differ between passes: {', '.join(varied)}")
+    print(
+        "each chapter's answer the same bytes every pass"
+        if not varied
+        else f"answers that differ between passes: {', '.join(varied)}"
+    )
     return 1 if varied else 0
 
 

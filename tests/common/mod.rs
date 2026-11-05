@@ -37,7 +37,12 @@ pub fn data(name: &str) -> Vec<u8> {
 
 /// A file of the server's own tests/data
 pub fn own(name: &str) -> Vec<u8> {
-    std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data").join(name)).expect("the server's tests/data")
+    std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/data")
+            .join(name),
+    )
+    .expect("the server's tests/data")
 }
 
 /// test.wav (16 kHz mono 16-bit PCM, 60 s, a 44-byte header) n times over
@@ -58,13 +63,31 @@ pub fn test_wav_times(n: usize) -> Vec<u8> {
 /// pktito-c's standard output for the arguments, run in the tree
 pub fn cli(args: &[&str]) -> Vec<u8> {
     let tree = libpktito();
-    let out = Command::new(tree.join("pktito-c")).args(args).current_dir(&tree).output().expect("pktito-c runs");
-    assert!(out.status.success(), "pktito-c {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    let out = Command::new(tree.join("pktito-c"))
+        .args(args)
+        .current_dir(&tree)
+        .output()
+        .expect("pktito-c runs");
+    assert!(
+        out.status.success(),
+        "pktito-c {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     out.stdout
 }
 
 pub fn engine(models: Vec<Arc<Model>>, threads: usize, workers: usize, fast: bool) -> Engine {
-    Engine::new(models, Config { threads, workers, fast, max_requests: 16, max_seconds: 4.0 * 3600.0, ffmpeg: None })
+    Engine::new(
+        models,
+        Config {
+            threads,
+            workers,
+            fast,
+            max_requests: 16,
+            max_seconds: 4.0 * 3600.0,
+            ffmpeg: None,
+        },
+    )
 }
 
 /// The ffmpeg the tests decode with: PKTITO_FFMPEG, which must pass the
@@ -73,7 +96,9 @@ pub fn engine(models: Vec<Arc<Model>>, threads: usize, workers: usize, fast: boo
 pub fn ffmpeg() -> Option<Arc<Ffmpeg>> {
     let given = std::env::var_os("PKTITO_FFMPEG").map(PathBuf::from);
     let path = given.clone().or_else(|| {
-        std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join("ffmpeg")).find(|p| p.is_file())
+        std::env::split_paths(&std::env::var_os("PATH")?)
+            .map(|d| d.join("ffmpeg"))
+            .find(|p| p.is_file())
     });
     let Some(path) = path else {
         eprintln!("no ffmpeg (PKTITO_FFMPEG, or on PATH): its checks skipped");
@@ -93,7 +118,8 @@ pub fn ffmpeg() -> Option<Arc<Ffmpeg>> {
 /// like name (an MP4 is indexed at its end, as ffmpeg writes one); None and
 /// a note when that ffmpeg cannot
 pub fn transcode(ff: &Ffmpeg, args: &[&str], name: &str) -> Option<Vec<u8>> {
-    let out = std::env::temp_dir().join(format!("pktito-server-test-{}-{name}", std::process::id()));
+    let out =
+        std::env::temp_dir().join(format!("pktito-server-test-{}-{name}", std::process::id()));
     let made = Command::new(&ff.path)
         .args(["-nostdin", "-loglevel", "error", "-y", "-i"])
         .arg(libpktito().join("tests/data/test.wav"))
@@ -105,11 +131,24 @@ pub fn transcode(ff: &Ffmpeg, args: &[&str], name: &str) -> Option<Vec<u8>> {
     let bytes = if made { std::fs::read(&out).ok() } else { None };
     let _ = std::fs::remove_file(&out);
     if bytes.is_none() {
-        eprintln!("{} cannot make {name} with {args:?}: its check skipped", ff.version);
+        eprintln!(
+            "{} cannot make {name} with {args:?}: its check skipped",
+            ff.version
+        );
     }
     bytes
 }
 
 pub fn engine_ffmpeg(models: Vec<Arc<Model>>, ff: Arc<Ffmpeg>, max_seconds: f64) -> Engine {
-    Engine::new(models, Config { threads: 2, workers: 1, fast: false, max_requests: 16, max_seconds, ffmpeg: Some(ff) })
+    Engine::new(
+        models,
+        Config {
+            threads: 2,
+            workers: 1,
+            fast: false,
+            max_requests: 16,
+            max_seconds,
+            ffmpeg: Some(ff),
+        },
+    )
 }

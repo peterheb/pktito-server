@@ -149,27 +149,56 @@ extern "C" {
     fn pk_asr_set_fast_mode(a: *mut PkAsr, on: c_int);
     fn pk_asr_run(a: *mut PkAsr, x: *const f32, n: usize, toks: *mut *const PkTok) -> c_long;
     fn pk_transcribe_defaults(o: *mut PkTranscribeOpts);
-    fn pk_steps_new(a: *mut PkAsr, x: *const f32, n: usize, o: *const PkTranscribeOpts) -> *mut PkSteps;
+    fn pk_steps_new(
+        a: *mut PkAsr,
+        x: *const f32,
+        n: usize,
+        o: *const PkTranscribeOpts,
+    ) -> *mut PkSteps;
     fn pk_steps_chunks(s: *const PkSteps) -> usize;
     fn pk_steps_job(s: *mut PkSteps, j: *mut PkJob) -> c_int;
     fn pk_steps_put(s: *mut PkSteps, j: *const PkJob, toks: *const PkTok, count: c_long) -> c_int;
     fn pk_steps_take(s: *mut PkSteps, out: *mut PkChunkOut) -> c_int;
     fn pk_steps_free(s: *mut PkSteps);
-    fn pk_text(m: *const PkModel, t: *const PkTok, n: usize, out: *mut c_char, cap: usize) -> usize;
+    fn pk_text(m: *const PkModel, t: *const PkTok, n: usize, out: *mut c_char, cap: usize)
+        -> usize;
     fn pk_piece(m: *const PkModel, id: i32, len: *mut usize) -> *const c_char;
     fn pk_words(m: *const PkModel, t: *const PkTok, n: usize, out: *mut PkWord) -> usize;
     fn pk_backend() -> *const c_char;
     fn pk_compiler() -> *const c_char;
     fn pk_version() -> *const c_char;
     fn pk_seg_defaults(p: *mut PkSegParams);
-    fn pk_asr_speech(a: *mut PkAsr, x: *const f32, n: usize, p: *const PkSegParams, out: *mut PkSeg,
-                     cap: usize) -> c_long;
-    fn pk_captions(w: *const PkCapword, n: usize, lang: *const c_char, media_end: i64, out: *mut PkCue) -> c_long;
+    fn pk_asr_speech(
+        a: *mut PkAsr,
+        x: *const f32,
+        n: usize,
+        p: *const PkSegParams,
+        out: *mut PkSeg,
+        cap: usize,
+    ) -> c_long;
+    fn pk_captions(
+        w: *const PkCapword,
+        n: usize,
+        lang: *const c_char,
+        media_end: i64,
+        out: *mut PkCue,
+    ) -> c_long;
     fn pk_language(w: *const PkCapword, n: usize) -> *const c_char;
-    fn pk_sentences(m: *const PkModel, t: *const PkTok, n: usize, lang: *const c_char, done: c_int,
-                    out: *mut PkSentence) -> c_long;
-    pub fn pk_wav_open_file(f: *mut libc::FILE, name: *const c_char, info: *mut PkWavInfo, err: *mut c_char,
-                            errlen: usize) -> *mut PkWav;
+    fn pk_sentences(
+        m: *const PkModel,
+        t: *const PkTok,
+        n: usize,
+        lang: *const c_char,
+        done: c_int,
+        out: *mut PkSentence,
+    ) -> c_long;
+    pub fn pk_wav_open_file(
+        f: *mut libc::FILE,
+        name: *const c_char,
+        info: *mut PkWavInfo,
+        err: *mut c_char,
+        errlen: usize,
+    ) -> *mut PkWav;
     pub fn pk_wav_read(w: *mut PkWav, out: *mut f32, n: usize) -> usize;
     pub fn pk_wav_status(w: *const PkWav, err: *mut c_char, errlen: usize) -> c_int;
     pub fn pk_wav_close(w: *mut PkWav);
@@ -189,7 +218,11 @@ fn owned(s: *const c_char) -> String {
 
 /// An error buffer's message, up to its NUL
 pub fn message(err: &[c_char]) -> String {
-    let bytes: Vec<u8> = err.iter().take_while(|&&c| c != 0).map(|&c| c as u8).collect();
+    let bytes: Vec<u8> = err
+        .iter()
+        .take_while(|&&c| c != 0)
+        .map(|&c| c as u8)
+        .collect();
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
@@ -237,7 +270,11 @@ impl Model {
                 ptr,
                 name: owned(pk_model_name(ptr)),
                 english: languages == "en",
-                languages: languages.split(',').filter(|l| !l.is_empty()).map(String::from).collect(),
+                languages: languages
+                    .split(',')
+                    .filter(|l| !l.is_empty())
+                    .map(String::from)
+                    .collect(),
                 credit: meta(c"credit"),
                 rate: pk_model_rate(ptr) as u32,
                 frame_seconds: pk_model_frame_seconds(ptr),
@@ -255,10 +292,19 @@ impl Model {
         let mut cap = 256.max(toks.len() * 16);
         loop {
             let mut buf = vec![0u8; cap];
-            let len = unsafe { pk_text(self.ptr, toks.as_ptr(), toks.len(), buf.as_mut_ptr() as *mut c_char, cap) };
+            let len = unsafe {
+                pk_text(
+                    self.ptr,
+                    toks.as_ptr(),
+                    toks.len(),
+                    buf.as_mut_ptr() as *mut c_char,
+                    cap,
+                )
+            };
             if len < cap {
                 buf.truncate(len);
-                return String::from_utf8(buf).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+                return String::from_utf8(buf)
+                    .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
             }
             cap = len + 1;
         }
@@ -267,8 +313,20 @@ impl Model {
     /// A word's text (pk_text), cut at 1023 bytes as pktito-c cuts one
     pub fn word(&self, toks: &[PkTok]) -> String {
         let mut buf = [0u8; 1024];
-        let len = unsafe { pk_text(self.ptr, toks.as_ptr(), toks.len(), buf.as_mut_ptr() as *mut c_char, buf.len()) };
-        let len = if len < buf.len() { len } else { buf.iter().position(|&b| b == 0).unwrap_or(0) };
+        let len = unsafe {
+            pk_text(
+                self.ptr,
+                toks.as_ptr(),
+                toks.len(),
+                buf.as_mut_ptr() as *mut c_char,
+                buf.len(),
+            )
+        };
+        let len = if len < buf.len() {
+            len
+        } else {
+            buf.iter().position(|&b| b == 0).unwrap_or(0)
+        };
         String::from_utf8_lossy(&buf[..len]).into_owned()
     }
 
@@ -299,7 +357,8 @@ impl Model {
         let lang = lang.map(|l| CString::new(l).unwrap_or_default());
         let lp = lang.as_ref().map_or(std::ptr::null(), |l| l.as_ptr());
         let mut out = vec![PkSentence::default(); toks.len()];
-        let n = unsafe { pk_sentences(self.ptr, toks.as_ptr(), toks.len(), lp, 1, out.as_mut_ptr()) };
+        let n =
+            unsafe { pk_sentences(self.ptr, toks.as_ptr(), toks.len(), lp, 1, out.as_mut_ptr()) };
         if n < 0 {
             return None;
         }
@@ -354,7 +413,16 @@ impl Asr {
     pub fn speech(&mut self, x: &[f32]) -> Option<Vec<PkSeg>> {
         let frames = x.len().div_ceil(512);
         let mut out = vec![PkSeg::default(); 2 * frames + 1];
-        let n = unsafe { pk_asr_speech(self.ptr, x.as_ptr(), x.len(), std::ptr::null(), out.as_mut_ptr(), out.len()) };
+        let n = unsafe {
+            pk_asr_speech(
+                self.ptr,
+                x.as_ptr(),
+                x.len(),
+                std::ptr::null(),
+                out.as_mut_ptr(),
+                out.len(),
+            )
+        };
         if n < 0 {
             return None;
         }
@@ -371,7 +439,11 @@ impl Drop for Asr {
 
 /// pk_transcribe_defaults, then the caller's changes
 pub fn transcribe_defaults() -> PkTranscribeOpts {
-    let mut o = PkTranscribeOpts { max_chunk_s: 0.0, retry: 0, context: 0 };
+    let mut o = PkTranscribeOpts {
+        max_chunk_s: 0.0,
+        retry: 0,
+        context: 0,
+    };
     unsafe { pk_transcribe_defaults(&mut o) };
     o
 }
@@ -423,7 +495,11 @@ impl Steps {
 
     /// The next job to hear, if there is one now; Err if memory runs out
     pub fn job(&mut self) -> Result<Option<PkJob>, StepsFailed> {
-        let mut j = PkJob { chunk: 0, retry: 0, at: PkSeg::default() };
+        let mut j = PkJob {
+            chunk: 0,
+            retry: 0,
+            at: PkSeg::default(),
+        };
         match unsafe { pk_steps_job(self.ptr, &mut j) } {
             1 => Ok(Some(j)),
             0 => Ok(None),
@@ -459,7 +535,14 @@ impl Steps {
                 } else {
                     Vec::new()
                 };
-                Ok(Some(Chunk { i: c.i, n: c.n, at: c.at, toks, retried: c.retried, at_frame: c.at_frame }))
+                Ok(Some(Chunk {
+                    i: c.i,
+                    n: c.n,
+                    at: c.at,
+                    toks,
+                    retried: c.retried,
+                    at_frame: c.at_frame,
+                }))
             }
             0 => Ok(None),
             _ => Err(StepsFailed),
@@ -475,11 +558,20 @@ impl Drop for Steps {
 
 /// Subtitle cues of words in order (pk_captions), in lang, a two-letter
 /// code: "en" adds the English rules. None if memory runs out.
-pub fn captions(texts: &[CString], times: &[(i64, i64)], lang: Option<&str>, media_end: i64) -> Option<Vec<PkCue>> {
+pub fn captions(
+    texts: &[CString],
+    times: &[(i64, i64)],
+    lang: Option<&str>,
+    media_end: i64,
+) -> Option<Vec<PkCue>> {
     let w: Vec<PkCapword> = texts
         .iter()
         .zip(times)
-        .map(|(t, &(start, end))| PkCapword { text: t.as_ptr(), start, end })
+        .map(|(t, &(start, end))| PkCapword {
+            text: t.as_ptr(),
+            start,
+            end,
+        })
         .collect();
     let mut out = vec![PkCue::default(); w.len().max(1)];
     let lang = lang.map(|l| CString::new(l).unwrap_or_default());
@@ -494,7 +586,14 @@ pub fn captions(texts: &[CString], times: &[(i64, i64)], lang: Option<&str>, med
 
 /// The language of the words (pk_language), its two-letter code
 pub fn language(texts: &[CString]) -> Option<String> {
-    let w: Vec<PkCapword> = texts.iter().map(|t| PkCapword { text: t.as_ptr(), start: 0, end: 0 }).collect();
+    let w: Vec<PkCapword> = texts
+        .iter()
+        .map(|t| PkCapword {
+            text: t.as_ptr(),
+            start: 0,
+            end: 0,
+        })
+        .collect();
     let l = unsafe { pk_language(w.as_ptr(), w.len()) };
     if l.is_null() {
         None

@@ -33,18 +33,18 @@ by .github/workflows/image.yml, against the libpktito commit it names.
 
 ## Run
 
-| option | |
-|---|---|
-| `-m FILE.pkf` | model to serve (repeatable); the first is the default |
-| `-t N` | total threads (default: one per core); a multiple of 4 gives every worker 4 |
-| `-w N` | workers, the threads dealt among them (default: one per 4 threads); a worker hears one chunk at a time |
-| `-l ADDR` | address to listen on (127.0.0.1:8000) |
-| `--api-key KEY` | require `Authorization: Bearer KEY` on the API, `/v1` (or `PKTITO_API_KEY`) |
-| `--max-upload-mb MB` | largest upload (256) |
-| `--max-hours H` | longest recording (4) |
-| `--max-requests N` | most requests in progress (16); more get 503 |
-| `--fast` | up to 7% faster; transcripts may differ slightly |
-| `--ffmpeg PATH` | ffmpeg 6.0 or later, for formats other than WAV and AIFF (none: those alone); see "Audio" |
+| option               |                                                                                                        |
+| -------------------- | ------------------------------------------------------------------------------------------------------ |
+| `-m FILE.pkf`        | model to serve (repeatable); the first is the default                                                  |
+| `-t N`               | total threads (default: one per core); a multiple of 4 gives every worker 4                            |
+| `-w N`               | workers, the threads dealt among them (default: one per 4 threads); a worker hears one chunk at a time |
+| `-l ADDR`            | address to listen on (127.0.0.1:8000)                                                                  |
+| `--api-key KEY`      | require `Authorization: Bearer KEY` on the API, `/v1` (or `PKTITO_API_KEY`)                            |
+| `--max-upload-mb MB` | largest upload (256)                                                                                   |
+| `--max-hours H`      | longest recording (4)                                                                                  |
+| `--max-requests N`   | most requests in progress (16); more get 503                                                           |
+| `--fast`             | up to 7% faster; transcripts may differ slightly                                                       |
+| `--ffmpeg PATH`      | ffmpeg 6.0 or later, for formats other than WAV and AIFF (none: those alone); see "Audio"              |
 
 `RUST_LOG=debug` says more. At `info`, each request logs its audio, its
 time and its speed.
@@ -59,6 +59,7 @@ so as it starts. Each worker has a transcriber of its own for each model,
 and the model itself is shared.
 
 A request's work is a series of jobs:
+
 - **The plan.** The upload is decoded, then Silero's VAD runs over it and
   the chunks are cut (`pk_steps_new`), on the threads of the worker that
   takes the job.
@@ -69,6 +70,7 @@ A request's work is a series of jobs:
 A free worker takes the next job of the request whose turn it is, and that
 request's turn goes to the back. So the requests share the workers a job at
 a time, a chunk of 30.72 s at most:
+
 - A short request sent behind long ones waits for one chunk on a worker,
   not for the long requests to finish.
 - A request alone has every worker, its chunks heard several at once, as
@@ -81,6 +83,7 @@ recording's budget for retries, 20% of its length (libpktito's README,
 "When the model drops speech").
 
 What this costs a request that is alone:
+
 - **A recording of one chunk** is heard on one worker's threads, not on
   all of them.
 - **With `-w 1`**, a single worker with every thread, a one-chunk request
@@ -101,12 +104,12 @@ on 2026-11-03, with its LLM stopped: `-t 20`, the v2 model, libpktito's
 neon-sve backend, gcc 13.3.0. AliceBench chapters 1 to 8 were sent at once,
 two rounds each. x is the audio's length over the batch's wall time:
 
-| `-w` | threads each | 1 request | 2 | 4 | 8 | a 60 s request behind 4 chapters |
-|---|---|---|---|---|---|---|
-| 1 | 20 | 117-122x | 117x | 125-127x | 119-126x | 4.13 s |
-| 2 | 10 | 172-180x | 178-182x | 180x | 176x | 2.98 s |
-| 4 | 5 | 203-212x | 212-215x | 218-220x | 220-221x | 2.27 s |
-| 5 | 4 | 197-211x | 211-218x | 211-215x | 215x | 2.64 s |
+| `-w` | threads each | 1 request | 2        | 4        | 8        | a 60 s request behind 4 chapters |
+| ---- | ------------ | --------- | -------- | -------- | -------- | -------------------------------- |
+| 1    | 20           | 117-122x  | 117x     | 125-127x | 119-126x | 4.13 s                           |
+| 2    | 10           | 172-180x  | 178-182x | 180x     | 176x     | 2.98 s                           |
+| 4    | 5            | 203-212x  | 212-215x | 218-220x | 220-221x | 2.27 s                           |
+| 5    | 4            | 197-211x  | 211-218x | 211-215x | 215x     | 2.64 s                           |
 
 - **Requests at once cost nothing.** Each row is level from 1 request to 8.
 - **pktito-c** heard chapters 1 to 4 alone at 201 to 218x on the same 20
@@ -122,10 +125,10 @@ two rounds each. x is the audio's length over the batch's wall time:
 A request alone, the server warm, best of 5, in seconds:
 
 | recording | chunks | `-w 1` | `-w 4` |
-|---|---|---|---|
-| 25 s | 1 | 0.178 | 0.223 |
-| 60 s | 3 | 0.458 | 0.308 |
-| 120 s | 6 | 0.986 | 0.544 |
+| --------- | ------ | ------ | ------ |
+| 25 s      | 1      | 0.178  | 0.223  |
+| 60 s      | 3      | 0.458  | 0.308  |
+| 120 s     | 6      | 0.986  | 0.544  |
 
 So on a GB10, `-w 4`, four workers of 5 threads, is the best of these at
 every load. It costs 45 ms against one wide worker on a recording of one
@@ -139,11 +142,11 @@ pinned, `tools/bench.py --passes 3 --at-once 4` gave these (AliceBench
 through Ubuntu's ffmpeg 6.1.1, 8.94 hours of audio, every request a 200, one
 run each, 2026-11-04):
 
-| `-t` | workers | speed | a thread |
-|---|---|---|---|
-| 4 | 1 of 4 | 87.0x | 21.8x |
-| 8 | 2 of 4 | 160.1x | 20.0x |
-| 12 | 3 of 4 | 197.2x | 16.4x |
+| `-t` | workers | speed  | a thread |
+| ---- | ------- | ------ | -------- |
+| 4    | 1 of 4  | 87.0x  | 21.8x    |
+| 8    | 2 of 4  | 160.1x | 20.0x    |
+| 12   | 3 of 4  | 197.2x | 16.4x    |
 
 Each worker added less than the one before: 73x for the second, 37x for the
 third.
@@ -158,14 +161,14 @@ stream, one fixed prompt and 512 tokens out. Alone, it ran 23.1 to 23.6
 engine steps a second (51 to 53 tokens a second), and each change below is
 against the mean of the runs alone in the same session.
 
-| the server | runs | the LLM's change | its speed | its memory |
-|---|---|---|---|---|
-| idle | 3 | -0.4% to +1.3% | no CPU used | 28-30 MB before its first request, 641 MB after |
-| a 10 s recording every 10 s | 2 | -0.2%, 0.0% | 0.17 s a recording (60x) | 622-641 MB |
-| busy, `-t 2` | 1 | 0.0% | 37x | 842 MB at most |
-| busy, `-t 4` | 3 | 0.0%, -0.9%, -1.4% | 66-70x | 857-896 MB at most |
-| busy, `-t 8` | 1 | -3.5% | 124x | 945 MB at most |
-| busy, no `-t` (20 threads) | 4 | -4.2% to -7.3% | 149-153x | 1,093-1,117 MB at most |
+| the server                  | runs | the LLM's change   | its speed                | its memory                                      |
+| --------------------------- | ---- | ------------------ | ------------------------ | ----------------------------------------------- |
+| idle                        | 3    | -0.4% to +1.3%     | no CPU used              | 28-30 MB before its first request, 641 MB after |
+| a 10 s recording every 10 s | 2    | -0.2%, 0.0%        | 0.17 s a recording (60x) | 622-641 MB                                      |
+| busy, `-t 2`                | 1    | 0.0%               | 37x                      | 842 MB at most                                  |
+| busy, `-t 4`                | 3    | 0.0%, -0.9%, -1.4% | 66-70x                   | 857-896 MB at most                              |
+| busy, `-t 8`                | 1    | -3.5%              | 124x                     | 945 MB at most                                  |
+| busy, no `-t` (20 threads)  | 4    | -4.2% to -7.3%     | 149-153x                 | 1,093-1,117 MB at most                          |
 
 "Busy" is two requests at once, AliceBench chapters 1 and 2 over and over.
 The `-t 4` and no-`-t` runs were taken both ways: the server's work
@@ -200,6 +203,7 @@ model's 600 MB of page cache included (Memory, below).
   ran at 116x against 161x unpinned.
 
 So, on a machine shared with an LLM:
+
 - Give the server a few cores. `-t 4` cost the LLM 1.4% at most here, and
   still heard 66-70 times real time.
 - Don't pin it. Under a CPU mask anyway (taskset, systemd's
@@ -233,6 +237,7 @@ worker's 70 MB, and 1.4 GB for four requests. If it ever went past 3 GB,
 ## Memory
 
 What the server holds:
+
 - **The model**, mapped read-only from its file: about 600 MB for v2,
   shared by every worker, and page cache the kernel can drop and read back.
 - **Each worker's transcriber**, about 70 MB: what the encoder works in for
@@ -268,16 +273,16 @@ loaded: `--max-requests 4 --max-hours 1 --max-upload-mb 128` comes to about
 
 `POST /v1/audio/transcriptions` takes a multipart form:
 
-| field | |
-|---|---|
-| `file` | the recording (see "Audio" below) |
-| `model` | a model's name, from `GET /v1/models`. Any other name (an OpenAI client's `whisper-1`) gets the first model that writes `language`, or the first model given |
-| `language` | ISO 639-1. A model that does not write it is a 400. Parakeet finds the language itself, so this only picks the model |
-| `response_format` | `json` (the default), `text`, `srt`, `vtt`, `verbose_json`, `pktito_json` |
-| `timestamp_granularities[]` | with `verbose_json`: `segment` (the default), `word`, or both |
-| `stream` | `true`: server-sent events, OpenAI's `transcript.text.delta` for each chunk as it is done, in order, then `transcript.text.done` |
-| `retry`, `context` | pktito's own, both on by default. `false` is pktito-c's `--no-retry` or `--no-context`; with both off, each chunk is NeMo's transcript of it |
-| `prompt`, `temperature` | read and left: a transducer has nothing they set |
+| field                       |                                                                                                                                                              |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `file`                      | the recording (see "Audio" below)                                                                                                                            |
+| `model`                     | a model's name, from `GET /v1/models`. Any other name (an OpenAI client's `whisper-1`) gets the first model that writes `language`, or the first model given |
+| `language`                  | ISO 639-1. A model that does not write it is a 400. Parakeet finds the language itself, so this only picks the model                                         |
+| `response_format`           | `json` (the default), `text`, `srt`, `vtt`, `verbose_json`, `pktito_json`                                                                                    |
+| `timestamp_granularities[]` | with `verbose_json`: `segment` (the default), `word`, or both                                                                                                |
+| `stream`                    | `true`: server-sent events, OpenAI's `transcript.text.delta` for each chunk as it is done, in order, then `transcript.text.done`                             |
+| `retry`, `context`          | pktito's own, both on by default. `false` is pktito-c's `--no-retry` or `--no-context`; with both off, each chunk is NeMo's transcript of it                 |
+| `prompt`, `temperature`     | read and left: a transducer has nothing they set                                                                                                             |
 
 **Audio.** WAV and AIFF go through libpktito's own reader and resampler, the
 ones pktito-c uses: any rate, any channel count, brought to 16 kHz mono. A
@@ -289,6 +294,7 @@ updates the one it is given: its build, codecs and fixes are the admin's.
 
 Each upload gets an ffmpeg of its own (src/ffmpeg.rs), with only what
 decoding needs, so that what a damaged file does to it stays there:
+
 - the upload as its standard input, a file in memory that it can seek in,
   as an MP4 indexed at its end needs, read through ffmpeg's `fd:` protocol
   alone, so that it opens no path and no address;
@@ -335,6 +341,7 @@ connection, none took over 0.3 s, the server's memory peaked at 659 MB, and
 test.wav after them gave pktito-c's bytes.
 
 **The formats:**
+
 - `json` is `{"text": ...}`: the chunks' texts, a space between them.
 - `text` is that text and a newline.
 - `srt` and `vtt` are pktito-c's `--srt` and `--vtt`: libpktito's caption
@@ -352,6 +359,7 @@ test.wav after them gave pktito-c's bytes.
   end, text, and its words and tokens with their times, then `meta`.
 
 **The other endpoints:**
+
 - `POST /v1/audio/vad` takes `file` (and `model`, for its VAD). It answers
   with pktito-c `segments`' speech, Silero's defaults, in seconds:
   `{"duration": 60.0, "segments": [{"start": 0.002, "end": 2.046}, ...]}`
@@ -371,6 +379,7 @@ still gets that 503 instead of a reset. A job that fails inside the server
 answers its own request with a 500, and its worker goes on.
 
 **Errors** are OpenAI's, `{"error": {"message", "type", "param", "code"}}`:
+
 - 400: a form or an upload the server cannot take.
 - 401: no key, or the wrong one.
 - 404: a model the server does not have.
@@ -403,14 +412,24 @@ monitors alone (DOCKER.md's `-p`).
   threads having run out, or when its thread has ended:
 
   ```json
-  {"status": "ok", "workers": 3, "worker_threads": [5, 5, 4], "workers_busy": 1,
-   "workers_failed": 0, "requests": 2, "max_requests": 16, "fast": false,
-   "backend": "avx512-vnni (...)", "compiler": "gcc 15.2.0"}
+  {
+    "status": "ok",
+    "workers": 3,
+    "worker_threads": [5, 5, 4],
+    "workers_busy": 1,
+    "workers_failed": 0,
+    "requests": 2,
+    "max_requests": 16,
+    "fast": false,
+    "backend": "avx512-vnni (...)",
+    "compiler": "gcc 15.2.0"
+  }
   ```
 
   `status` is `ok` when every worker can, `degraded` when some can't, and
   `unavailable` with the 503. `requests` are the requests in hand, their
   uploads coming in or their audio being heard.
+
 - `GET /ping` is `/health`'s status alone, with no body, as vLLM's and
   SGLang's `/ping` and `/health` are.
 - `GET /version` is `{"version": "0.1.0", "libpktito": "0.1.0"}`.
@@ -418,19 +437,19 @@ monitors alone (DOCKER.md's `-p`).
   the measure's, as vLLM's and SGLang's are, and vLLM's own where the
   measure is the same:
 
-| metric | |
-|---|---|
-| `pktito:audio_seconds_total{model_name}` | audio transcribed, in seconds. Its rate is the speed: `rate(pktito:audio_seconds_total[5m])` at 200 is 200 times real time |
-| `pktito:audio_pending_seconds` | audio decoded and not yet transcribed, the work in hand. Over the speed, how long it will take |
-| `pktito:e2e_request_latency_seconds{model_name}` | a histogram of the transcriptions' times, each from its upload in hand to its last chunk heard |
-| `pktito:num_requests_running` | requests begun: decoded, cut into chunks, or their chunks heard |
-| `pktito:num_requests_waiting` | requests holding a slot and not yet begun, their uploads coming in or in hand |
-| `pktito:max_requests` | `--max-requests`, the slots: one more request is a 503 |
-| `pktito:http_requests_total{route,code}` | the API's answers, by route and status |
-| `pktito:workers{state}` | the workers `idle`, `busy` or `failed` |
-| `pktito:threads` | `-t` |
-| `pktito:server_info{version,libpktito,backend,compiler}` | always 1 |
-| `process_start_time_seconds` | when the server started |
+| metric                                                   |                                                                                                                            |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `pktito:audio_seconds_total{model_name}`                 | audio transcribed, in seconds. Its rate is the speed: `rate(pktito:audio_seconds_total[5m])` at 200 is 200 times real time |
+| `pktito:audio_pending_seconds`                           | audio decoded and not yet transcribed, the work in hand. Over the speed, how long it will take                             |
+| `pktito:e2e_request_latency_seconds{model_name}`         | a histogram of the transcriptions' times, each from its upload in hand to its last chunk heard                             |
+| `pktito:num_requests_running`                            | requests begun: decoded, cut into chunks, or their chunks heard                                                            |
+| `pktito:num_requests_waiting`                            | requests holding a slot and not yet begun, their uploads coming in or in hand                                              |
+| `pktito:max_requests`                                    | `--max-requests`, the slots: one more request is a 503                                                                     |
+| `pktito:http_requests_total{route,code}`                 | the API's answers, by route and status                                                                                     |
+| `pktito:workers{state}`                                  | the workers `idle`, `busy` or `failed`                                                                                     |
+| `pktito:threads`                                         | `-t`                                                                                                                       |
+| `pktito:server_info{version,libpktito,backend,compiler}` | always 1                                                                                                                   |
+| `process_start_time_seconds`                             | when the server started                                                                                                    |
 
 ```yaml
 scrape_configs:
@@ -442,7 +461,7 @@ scrape_configs:
 ## Benchmarking
 
 `tools/bench.py` times a running server on AliceBench: the twelve chapters
-of LibriVox's *Alice's Adventures in Wonderland*, 2:58:51 of 16 kHz FLAC,
+of LibriVox's _Alice's Adventures in Wonderland_, 2:58:51 of 16 kHz FLAC,
 downloaded (170 MB) and checked by SHA-256 the first time. It sends them 5
 times over with 4 requests at once, after one untimed, and gives the hours
 of audio over the time they took. The server reads them through its ffmpeg:
@@ -466,6 +485,7 @@ It needs Python 3.8 or later and nothing else.
 `PKTITO_DIR=../libpktito cargo test --release` needs the tree's models
 (models/parakeet-tdt-0.6b-v2.pkf and v3) and its built `pktito-c`. The tests
 hold:
+
 - **tests/api.rs**, a request at a time:
   - `pktito_json` of test.wav against libpktito's tests/data/test.v2.json,
     test.v3.json and the two fast-mode files, byte for byte, and of a
@@ -509,6 +529,11 @@ hold:
 - **The unit tests**: Rust's `{:.2}` and `{:.3}` against the C library's
   `printf`, over the times a transcript has, the ties, and a million more
   values.
+
+`scripts/fmt.sh` puts every source file in its language's standard form,
+each formatter at its defaults (cargo fmt, prettier 3.6.2, ruff 0.14.3); run
+it before each commit. `scripts/fmt.sh --check` changes nothing and exits 1
+if a file isn't formatted.
 
 ## License
 

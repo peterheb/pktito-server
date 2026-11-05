@@ -51,7 +51,10 @@ impl std::ops::Deref for Api {
 type App = Arc<Api>;
 
 pub fn router(server: Server, max_upload: usize) -> Router {
-    let app = Arc::new(Api { server, http: Http::new() });
+    let app = Arc::new(Api {
+        server,
+        http: Http::new(),
+    });
     Router::new()
         .route("/v1/audio/transcriptions", post(transcriptions))
         .route("/v1/audio/vad", post(vad))
@@ -68,7 +71,10 @@ pub fn router(server: Server, max_upload: usize) -> Router {
 
 /// An API request's answer, counted by its route and status
 async fn count(State(app): State<App>, req: Request, next: Next) -> Response {
-    let route = req.extensions().get::<MatchedPath>().map_or(String::new(), |p| p.as_str().to_string());
+    let route = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map_or(String::new(), |p| p.as_str().to_string());
     let res = next.run(req).await;
     app.http.answered(&route, res.status().as_u16());
     res
@@ -86,11 +92,23 @@ pub struct ApiError {
 
 impl ApiError {
     fn invalid(param: &'static str, message: impl Into<String>) -> ApiError {
-        ApiError { status: StatusCode::BAD_REQUEST, kind: "invalid_request_error", code: None, param: Some(param), message: message.into() }
+        ApiError {
+            status: StatusCode::BAD_REQUEST,
+            kind: "invalid_request_error",
+            code: None,
+            param: Some(param),
+            message: message.into(),
+        }
     }
 
     fn internal(message: impl Into<String>) -> ApiError {
-        ApiError { status: StatusCode::INTERNAL_SERVER_ERROR, kind: "server_error", code: None, param: None, message: message.into() }
+        ApiError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            kind: "server_error",
+            code: None,
+            param: None,
+            message: message.into(),
+        }
     }
 
     fn body(&self) -> Value {
@@ -108,9 +126,12 @@ impl From<Failure> for ApiError {
     fn from(f: Failure) -> ApiError {
         match f {
             Failure::Unreadable(why) => ApiError::invalid("file", why),
-            Failure::TooLong(limit) => {
-                ApiError::invalid("file", format!("the recording is longer than this server takes, {limit:.0} s (--max-hours)"))
-            }
+            Failure::TooLong(limit) => ApiError::invalid(
+                "file",
+                format!(
+                    "the recording is longer than this server takes, {limit:.0} s (--max-hours)"
+                ),
+            ),
             Failure::Internal(why) => ApiError::internal(why),
         }
     }
@@ -123,7 +144,8 @@ impl From<Busy> for ApiError {
             kind: "server_error",
             code: Some("server_busy"),
             param: None,
-            message: "every request this server takes at once is taken (--max-requests): try again".into(),
+            message: "every request this server takes at once is taken (--max-requests): try again"
+                .into(),
         }
     }
 }
@@ -145,7 +167,13 @@ impl From<MultipartError> for ApiError {
             }
             cause = c.source();
         }
-        ApiError { status: e.status(), kind: "invalid_request_error", code: None, param: None, message: e.body_text() }
+        ApiError {
+            status: e.status(),
+            kind: "invalid_request_error",
+            code: None,
+            param: None,
+            message: e.body_text(),
+        }
     }
 }
 
@@ -194,7 +222,10 @@ fn boolean(param: &'static str, s: &str) -> Result<bool, ApiError> {
     match s.trim() {
         "true" | "1" => Ok(true),
         "false" | "0" => Ok(false),
-        other => Err(ApiError::invalid(param, format!("{param} {other}: true or false"))),
+        other => Err(ApiError::invalid(
+            param,
+            format!("{param} {other}: true or false"),
+        )),
     }
 }
 
@@ -229,9 +260,10 @@ fn pick(app: &Server, name: &str, language: Option<&str>) -> Result<usize, ApiEr
     let models = app.engine.models();
     if let Some(i) = models.iter().position(|m| m.name == name) {
         return match language {
-            Some(l) if !models[i].writes(l) => {
-                Err(ApiError::invalid("language", format!("{name} writes {}, not {l}", models[i].languages.join(" "))))
-            }
+            Some(l) if !models[i].writes(l) => Err(ApiError::invalid(
+                "language",
+                format!("{name} writes {}, not {l}", models[i].languages.join(" ")),
+            )),
             _ => Ok(i),
         };
     }
@@ -245,7 +277,10 @@ fn pick(app: &Server, name: &str, language: Option<&str>) -> Result<usize, ApiEr
 }
 
 /// A transcription's chunks as they come, to its end
-async fn collect(m: &Model, mut rx: UnboundedReceiver<Event>) -> Result<(usize, Vec<Heard>), ApiError> {
+async fn collect(
+    m: &Model,
+    mut rx: UnboundedReceiver<Event>,
+) -> Result<(usize, Vec<Heard>), ApiError> {
     let mut samples = 0;
     let mut chunks = Vec::new();
     loop {
@@ -254,7 +289,9 @@ async fn collect(m: &Model, mut rx: UnboundedReceiver<Event>) -> Result<(usize, 
             Some(Event::Chunk(c)) => chunks.push(format::heard(m, &c)),
             Some(Event::Done) => return Ok((samples, chunks)),
             Some(Event::Failed(f)) => return Err(f.into()),
-            Some(Event::Speech { .. }) | None => return Err(ApiError::internal("the request was dropped")),
+            Some(Event::Speech { .. }) | None => {
+                return Err(ApiError::internal("the request was dropped"))
+            }
         }
     }
 }
@@ -283,7 +320,9 @@ fn stream(m: Arc<Model>, rx: UnboundedReceiver<Event>) -> Response {
                         return Some((Ok::<_, Infallible>(e), Some((rx, text))));
                     }
                     Some(Event::Planned { .. }) => continue,
-                    Some(Event::Done) => break sse(json!({ "type": "transcript.text.done", "text": text })),
+                    Some(Event::Done) => {
+                        break sse(json!({ "type": "transcript.text.done", "text": text }))
+                    }
                     Some(Event::Failed(f)) => {
                         let mut e = ApiError::from(f).body();
                         e["type"] = "error".into();
@@ -299,7 +338,9 @@ fn stream(m: Arc<Model>, rx: UnboundedReceiver<Event>) -> Response {
             Some((Ok(last), None))
         }
     });
-    Sse::new(events).keep_alive(KeepAlive::default()).into_response()
+    Sse::new(events)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 fn plain(content_type: &'static str, body: String) -> Response {
@@ -308,7 +349,11 @@ fn plain(content_type: &'static str, body: String) -> Response {
 
 const FORMATS: &str = "json, text, srt, vtt, verbose_json or pktito_json";
 
-async fn transcriptions(State(app): State<App>, headers: HeaderMap, mp: Multipart) -> Result<Response, ApiError> {
+async fn transcriptions(
+    State(app): State<App>,
+    headers: HeaderMap,
+    mp: Multipart,
+) -> Result<Response, ApiError> {
     authorize(&app, &headers)?;
     // the request's slot before its upload: uploads coming in count against
     // --max-requests, bytes and all, and a busy server says so before the
@@ -316,11 +361,24 @@ async fn transcriptions(State(app): State<App>, headers: HeaderMap, mp: Multipar
     let slot = app.engine.slot()?;
     let f = form(mp).await?;
     let format = f.response_format.clone().unwrap_or_else(|| "json".into());
-    if !matches!(format.as_str(), "json" | "text" | "srt" | "vtt" | "verbose_json" | "pktito_json") {
-        return Err(ApiError::invalid("response_format", format!("response_format {format}: {FORMATS}")));
+    if !matches!(
+        format.as_str(),
+        "json" | "text" | "srt" | "vtt" | "verbose_json" | "pktito_json"
+    ) {
+        return Err(ApiError::invalid(
+            "response_format",
+            format!("response_format {format}: {FORMATS}"),
+        ));
     }
-    if let Some(g) = f.granularities.iter().find(|g| *g != "word" && *g != "segment") {
-        return Err(ApiError::invalid("timestamp_granularities", format!("timestamp_granularities {g}: word or segment")));
+    if let Some(g) = f
+        .granularities
+        .iter()
+        .find(|g| *g != "word" && *g != "segment")
+    {
+        return Err(ApiError::invalid(
+            "timestamp_granularities",
+            format!("timestamp_granularities {g}: word or segment"),
+        ));
     }
     let file = f.file.ok_or_else(|| ApiError::invalid("file", "no file"))?;
     let i = pick(&app, &f.model, f.language.as_deref())?;
@@ -343,7 +401,12 @@ async fn transcriptions(State(app): State<App>, headers: HeaderMap, mp: Multipar
         };
     }
     let (samples, chunks) = collect(&m, rx).await?;
-    let t = Transcript { model: &m, fast: app.engine.fast(), samples, chunks };
+    let t = Transcript {
+        model: &m,
+        fast: app.engine.fast(),
+        samples,
+        chunks,
+    };
     let took = t0.elapsed().as_secs_f64();
     tracing::info!(
         "{}: {:.1} s of audio in {:.2} s ({:.0}x), {} chunks, {}",
@@ -360,21 +423,33 @@ async fn transcriptions(State(app): State<App>, headers: HeaderMap, mp: Multipar
     Ok(match format.as_str() {
         "json" => Json(format::json(&t)).into_response(),
         "text" => plain("text/plain; charset=utf-8", t.text() + "\n"),
-        "srt" => plain("text/plain; charset=utf-8", format::subtitles(&t, false).ok_or_else(no_memory)?),
-        "vtt" => plain("text/vtt; charset=utf-8", format::subtitles(&t, true).ok_or_else(no_memory)?),
-        "verbose_json" => Json(format::verbose_json(&t, segments, words).ok_or_else(no_memory)?).into_response(),
+        "srt" => plain(
+            "text/plain; charset=utf-8",
+            format::subtitles(&t, false).ok_or_else(no_memory)?,
+        ),
+        "vtt" => plain(
+            "text/vtt; charset=utf-8",
+            format::subtitles(&t, true).ok_or_else(no_memory)?,
+        ),
+        "verbose_json" => {
+            Json(format::verbose_json(&t, segments, words).ok_or_else(no_memory)?).into_response()
+        }
         _ => plain("application/json", format::pktito_json(&t)),
     })
 }
 
 /// A recording's speech: Silero's segments with its defaults, as pktito-c
 /// segments prints them, in seconds
-async fn vad(State(app): State<App>, headers: HeaderMap, mp: Multipart) -> Result<Json<Value>, ApiError> {
+async fn vad(
+    State(app): State<App>,
+    headers: HeaderMap,
+    mp: Multipart,
+) -> Result<Json<Value>, ApiError> {
     authorize(&app, &headers)?;
-    let slot = app.engine.slot()?;                       // as a transcription's
+    let slot = app.engine.slot()?; // as a transcription's
     let f = form(mp).await?;
     let file = f.file.ok_or_else(|| ApiError::invalid("file", "no file"))?;
-    let i = pick(&app, &f.model, None)?;                 // each model file holds the VAD
+    let i = pick(&app, &f.model, None)?; // each model file holds the VAD
     let rate = app.engine.models()[i].rate as f64;
     let mut rx = slot.submit(i, file, Task::Speech);
     match rx.recv().await {
@@ -383,7 +458,9 @@ async fn vad(State(app): State<App>, headers: HeaderMap, mp: Multipart) -> Resul
                 .iter()
                 .map(|s| json!({ "start": s.start as f64 / rate, "end": s.end as f64 / rate }))
                 .collect();
-            Ok(Json(json!({ "duration": samples as f64 / rate, "segments": segs })))
+            Ok(Json(
+                json!({ "duration": samples as f64 / rate, "segments": segs }),
+            ))
         }
         Some(Event::Failed(f)) => Err(f.into()),
         _ => Err(ApiError::internal("the request was dropped")),
@@ -391,7 +468,11 @@ async fn vad(State(app): State<App>, headers: HeaderMap, mp: Multipart) -> Resul
 }
 
 fn model_json(m: &Model) -> Value {
-    let owner = if m.credit.is_empty() { "pktito" } else { m.credit.as_str() };
+    let owner = if m.credit.is_empty() {
+        "pktito"
+    } else {
+        m.credit.as_str()
+    };
     json!({ "id": m.name, "object": "model", "created": 0, "owned_by": owner })
 }
 
@@ -401,7 +482,11 @@ async fn models(State(app): State<App>, headers: HeaderMap) -> Result<Json<Value
     Ok(Json(json!({ "object": "list", "data": data })))
 }
 
-async fn model(State(app): State<App>, headers: HeaderMap, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
+async fn model(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
     authorize(&app, &headers)?;
     match app.engine.models().iter().find(|m| m.name == id) {
         Some(m) => Ok(Json(model_json(m))),
@@ -456,5 +541,8 @@ async fn version() -> Json<Value> {
 }
 
 async fn prometheus(State(app): State<App>) -> Response {
-    plain("text/plain; version=0.0.4; charset=utf-8", metrics::page(&app.engine, &app.http))
+    plain(
+        "text/plain; version=0.0.4; charset=utf-8",
+        metrics::page(&app.engine, &app.http),
+    )
 }

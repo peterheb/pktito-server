@@ -64,10 +64,16 @@ pub enum Failure {
 #[derive(Debug)]
 pub enum Event {
     /// Decoded and cut: its samples at the model's rate, and its chunks
-    Planned { samples: usize, chunks: usize },
+    Planned {
+        samples: usize,
+        chunks: usize,
+    },
     Chunk(Chunk),
     Done,
-    Speech { samples: usize, segments: Vec<PkSeg> },
+    Speech {
+        samples: usize,
+        segments: Vec<PkSeg>,
+    },
     Failed(Failure),
 }
 
@@ -93,8 +99,18 @@ struct Request {
 }
 
 enum Work {
-    Plan { id: u64, model: usize, upload: Vec<u8>, task: Task },
-    Hear { id: u64, model: usize, samples: Arc<Vec<f32>>, job: PkJob },
+    Plan {
+        id: u64,
+        model: usize,
+        upload: Vec<u8>,
+        task: Task,
+    },
+    Hear {
+        id: u64,
+        model: usize,
+        samples: Arc<Vec<f32>>,
+        job: PkJob,
+    },
 }
 
 impl Work {
@@ -141,11 +157,16 @@ impl State {
             let id = self.turns[k];
             let r = self.requests.get_mut(&id).expect("a request in turn");
             if r.tx.is_closed() {
-                self.remove(id);            // its caller is gone: no more of its jobs
+                self.remove(id); // its caller is gone: no more of its jobs
                 continue;
             }
             let work = if let Some(upload) = r.upload.take() {
-                Ok(Some(Work::Plan { id, model: r.model, upload, task: r.task.take().expect("a task") }))
+                Ok(Some(Work::Plan {
+                    id,
+                    model: r.model,
+                    upload,
+                    task: r.task.take().expect("a task"),
+                }))
             } else if let Some(s) = r.steps.as_mut() {
                 s.job().map(|j| {
                     j.map(|job| Work::Hear {
@@ -156,7 +177,7 @@ impl State {
                     })
                 })
             } else {
-                Ok(None)                    // being planned
+                Ok(None) // being planned
             };
             match work {
                 Ok(Some(w)) => {
@@ -175,7 +196,7 @@ impl State {
     /// to its caller, in order
     fn heard(&mut self, id: u64, job: &PkJob, toks: Option<Vec<PkTok>>) {
         let Some(r) = self.requests.get_mut(&id) else {
-            return;                         // gone; its job's tokens go with it
+            return; // gone; its job's tokens go with it
         };
         let steps = r.steps.as_mut().expect("steps for a job");
         let mut failed = toks.is_none();
@@ -255,10 +276,15 @@ pub struct Slot {
 impl Slot {
     /// The recording to hear in this slot, with a model: its events come on
     /// the receiver
-    pub fn submit(mut self, model: usize, upload: Vec<u8>, task: Task) -> mpsc::UnboundedReceiver<Event> {
+    pub fn submit(
+        mut self,
+        model: usize,
+        upload: Vec<u8>,
+        task: Task,
+    ) -> mpsc::UnboundedReceiver<Event> {
         let (tx, rx) = mpsc::unbounded_channel();
         let mut st = self.shared.lock();
-        st.coming -= 1;                     // the request's own now
+        st.coming -= 1; // the request's own now
         let id = st.next_id;
         st.next_id += 1;
         st.requests.insert(
@@ -348,7 +374,9 @@ pub struct Stats {
 pub fn deal(threads: usize, workers: usize) -> Vec<usize> {
     let threads = threads.max(1);
     let w = workers.clamp(1, threads);
-    (0..w).map(|k| threads / w + usize::from(k < threads % w)).collect()
+    (0..w)
+        .map(|k| threads / w + usize::from(k < threads % w))
+        .collect()
 }
 
 impl Engine {
@@ -361,8 +389,11 @@ impl Engine {
             took: vec![Histogram::default(); models.len()],
             ..State::default()
         };
-        let workers =
-            each.iter().map(|&threads| Worker { threads, busy: AtomicBool::new(false), broken: AtomicBool::new(false) });
+        let workers = each.iter().map(|&threads| Worker {
+            threads,
+            busy: AtomicBool::new(false),
+            broken: AtomicBool::new(false),
+        });
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
             ready: Condvar::new(),
@@ -379,7 +410,12 @@ impl Engine {
                     .expect("a worker thread")
             })
             .collect();
-        Engine { shared, threads, workers: each.len(), worker_threads: each }
+        Engine {
+            shared,
+            threads,
+            workers: each.len(),
+            worker_threads: each,
+        }
     }
 
     pub fn models(&self) -> &[Arc<Model>] {
@@ -417,7 +453,8 @@ impl Engine {
 
     pub fn stats(&self) -> Stats {
         let st = self.shared.lock();
-        let seconds = |samples: u64, model: usize| samples as f64 / self.shared.models[model].rate as f64;
+        let seconds =
+            |samples: u64, model: usize| samples as f64 / self.shared.models[model].rate as f64;
         let mut pending = vec![0u64; self.shared.models.len()];
         for r in st.requests.values() {
             if let Some(x) = &r.samples {
@@ -428,9 +465,17 @@ impl Engine {
         Stats {
             running: st.requests.len() + st.coming - waiting,
             waiting,
-            heard: st.heard.iter().enumerate().map(|(m, &n)| seconds(n, m)).collect(),
+            heard: st
+                .heard
+                .iter()
+                .enumerate()
+                .map(|(m, &n)| seconds(n, m))
+                .collect(),
             // from 0, where sum() starts at -0
-            pending: pending.iter().enumerate().fold(0.0, |a, (m, &n)| a + seconds(n, m)),
+            pending: pending
+                .iter()
+                .enumerate()
+                .fold(0.0, |a, (m, &n)| a + seconds(n, m)),
             took: st.took.clone(),
         }
     }
@@ -443,11 +488,19 @@ impl Engine {
             return Err(Busy);
         }
         st.coming += 1;
-        Ok(Slot { shared: self.shared.clone(), filled: false })
+        Ok(Slot {
+            shared: self.shared.clone(),
+            filled: false,
+        })
     }
 
     /// A slot, filled at once: for a caller with the upload in hand
-    pub fn submit(&self, model: usize, upload: Vec<u8>, task: Task) -> Result<mpsc::UnboundedReceiver<Event>, Busy> {
+    pub fn submit(
+        &self,
+        model: usize,
+        upload: Vec<u8>,
+        task: Task,
+    ) -> Result<mpsc::UnboundedReceiver<Event>, Busy> {
         Ok(self.slot()?.submit(model, upload, task))
     }
 }
@@ -466,7 +519,12 @@ impl Drop for Engine {
 
 /// Worker k's transcriber for a model, on its threads, made the first time
 /// it is needed; while none can be made, the worker counts as failed
-fn transcriber<'a>(asr: &'a mut [Option<Asr>], s: &Shared, k: usize, model: usize) -> Option<&'a mut Asr> {
+fn transcriber<'a>(
+    asr: &'a mut [Option<Asr>],
+    s: &Shared,
+    k: usize,
+    model: usize,
+) -> Option<&'a mut Asr> {
     if asr[model].is_none() {
         asr[model] = Asr::new(&s.models[model], s.workers[k].threads, s.config.fast);
         s.workers[k].broken.store(asr[model].is_none(), Relaxed);
@@ -497,24 +555,45 @@ fn work(s: Arc<Shared>, k: usize) {
         // transcribers are whole: a panic is Rust's, between libpktito's
         // calls, never inside one.
         let job = AssertUnwindSafe(|| match w {
-            Work::Plan { id, model, upload, task } => plan(&s, &mut asr, k, id, model, upload, task),
-            Work::Hear { id, model, samples, job } => {
+            Work::Plan {
+                id,
+                model,
+                upload,
+                task,
+            } => plan(&s, &mut asr, k, id, model, upload, task),
+            Work::Hear {
+                id,
+                model,
+                samples,
+                job,
+            } => {
                 let x = &samples[job.at.start as usize..job.at.end as usize];
                 let toks = transcriber(&mut asr, &s, k, model).and_then(|a| a.run(x));
                 s.lock().heard(id, &job, toks);
             }
         });
         if panic::catch_unwind(job).is_err() {
-            s.lock().fail(id, Failure::Internal("the server failed on this request".into()));
-            s.state.clear_poison();         // what the panic left is gone with the request
+            s.lock().fail(
+                id,
+                Failure::Internal("the server failed on this request".into()),
+            );
+            s.state.clear_poison(); // what the panic left is gone with the request
         }
         me.busy.store(false, Relaxed);
-        s.ready.notify_all();              // its jobs may have made others: a retry, or the next plan's
+        s.ready.notify_all(); // its jobs may have made others: a retry, or the next plan's
     }
 }
 
 /// A request's plan, on worker k: its upload decoded, then its VAD and chunks
-fn plan(s: &Shared, asr: &mut [Option<Asr>], k: usize, id: u64, model: usize, upload: Vec<u8>, task: Task) {
+fn plan(
+    s: &Shared,
+    asr: &mut [Option<Asr>],
+    k: usize,
+    id: u64,
+    model: usize,
+    upload: Vec<u8>,
+    task: Task,
+) {
     let m = &s.models[model];
     let max = (s.config.max_seconds * m.rate as f64) as usize;
     let samples = match audio::decode(upload, m.rate, max, s.config.ffmpeg.as_deref()) {
@@ -530,7 +609,10 @@ fn plan(s: &Shared, asr: &mut [Option<Asr>], k: usize, id: u64, model: usize, up
     };
     let n = samples.len();
     let Some(a) = transcriber(asr, s, k, model) else {
-        s.lock().fail(id, Failure::Internal("no transcriber: out of memory or threads".into()));
+        s.lock().fail(
+            id,
+            Failure::Internal("no transcriber: out of memory or threads".into()),
+        );
         return;
     };
     match task {
@@ -539,7 +621,10 @@ fn plan(s: &Shared, asr: &mut [Option<Asr>], k: usize, id: u64, model: usize, up
             let mut st = s.lock();
             if let Some(r) = st.remove(id) {
                 let _ = r.tx.send(match segments {
-                    Some(segments) => Event::Speech { samples: n, segments },
+                    Some(segments) => Event::Speech {
+                        samples: n,
+                        segments,
+                    },
                     None => Event::Failed(Failure::Internal("out of memory".into())),
                 });
             }
@@ -555,7 +640,10 @@ fn plan(s: &Shared, asr: &mut [Option<Asr>], k: usize, id: u64, model: usize, up
                 return;
             };
             match steps {
-                None => st.fail(id, Failure::Internal("out of memory, or max_chunk_s under a second".into())),
+                None => st.fail(
+                    id,
+                    Failure::Internal("out of memory, or max_chunk_s under a second".into()),
+                ),
                 Some(steps) => {
                     let chunks = steps.chunks();
                     let gone = r.tx.send(Event::Planned { samples: n, chunks }).is_err();
@@ -563,9 +651,9 @@ fn plan(s: &Shared, asr: &mut [Option<Asr>], k: usize, id: u64, model: usize, up
                         drop(steps);
                         st.remove(id);
                     } else if chunks == 0 {
-                        drop(steps);                // before the samples it points into
+                        drop(steps); // before the samples it points into
                         r.samples = Some(samples);
-                        st.done(id);                // no speech: heard to its end
+                        st.done(id); // no speech: heard to its end
                     } else {
                         r.steps = Some(steps);
                         r.samples = Some(samples);

@@ -15,7 +15,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A transcription's time's bounds, in seconds: a short recording takes a
 /// tenth of one, four hours of audio minutes, more on a small board
-pub const BUCKETS: [f64; 13] = [0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0];
+pub const BUCKETS: [f64; 13] = [
+    0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0,
+];
 
 /// Times, counted as a Prometheus histogram counts them
 #[derive(Clone, Debug, Default)]
@@ -27,7 +29,10 @@ pub struct Histogram {
 
 impl Histogram {
     pub fn observe(&mut self, seconds: f64) {
-        let k = BUCKETS.iter().position(|&le| seconds <= le).unwrap_or(BUCKETS.len());
+        let k = BUCKETS
+            .iter()
+            .position(|&le| seconds <= le)
+            .unwrap_or(BUCKETS.len());
         self.counts[k] += 1;
         self.sum += seconds;
     }
@@ -46,7 +51,10 @@ pub struct Http {
 
 impl Http {
     pub fn new() -> Http {
-        Http { started: SystemTime::now(), answers: Mutex::default() }
+        Http {
+            started: SystemTime::now(),
+            answers: Mutex::default(),
+        }
     }
 
     pub fn answered(&self, route: &str, status: u16) {
@@ -68,7 +76,9 @@ impl Default for Http {
 
 /// A label's value as the format quotes it
 fn quoted(v: &str) -> String {
-    v.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+    v.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
 
 #[derive(Default)]
@@ -82,7 +92,10 @@ impl Page {
     fn sample(&mut self, name: &str, labels: &[(&str, &str)], value: impl Display) {
         self.0.push_str(name);
         if !labels.is_empty() {
-            let ls: Vec<String> = labels.iter().map(|(k, v)| format!("{k}=\"{}\"", quoted(v))).collect();
+            let ls: Vec<String> = labels
+                .iter()
+                .map(|(k, v)| format!("{k}=\"{}\"", quoted(v)))
+                .collect();
             let _ = write!(self.0, "{{{}}}", ls.join(","));
         }
         let _ = writeln!(self.0, " {value}");
@@ -107,33 +120,96 @@ pub fn page(e: &Engine, http: &Http) -> String {
     let (backend, compiler) = ffi::backend();
     let backend = backend.split(' ').next().unwrap_or_default(); // its name, "avx2 (x86-64 ...)"'s avx2
     let mut p = Page::default();
-    p.family("pktito:server_info", "gauge", "The server's version, libpktito's, and the backend and compiler of its kernels");
+    p.family(
+        "pktito:server_info",
+        "gauge",
+        "The server's version, libpktito's, and the backend and compiler of its kernels",
+    );
     let libpktito = ffi::version();
-    let info = [("version", env!("CARGO_PKG_VERSION")), ("libpktito", &libpktito), ("backend", backend), ("compiler", &compiler)];
+    let info = [
+        ("version", env!("CARGO_PKG_VERSION")),
+        ("libpktito", &libpktito),
+        ("backend", backend),
+        ("compiler", &compiler),
+    ];
     p.sample("pktito:server_info", &info, 1);
-    p.family("process_start_time_seconds", "gauge", "Unix time the server started");
-    p.sample("process_start_time_seconds", &[], http.started.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()));
-    p.family("pktito:threads", "gauge", "Threads for transcription, the workers' together (-t)");
-    p.sample("pktito:threads", &[], e.worker_threads.iter().sum::<usize>());
-    p.family("pktito:workers", "gauge", "Workers: idle, busy with a job, or failed (no transcriber to be had, or the thread gone)");
+    p.family(
+        "process_start_time_seconds",
+        "gauge",
+        "Unix time the server started",
+    );
+    p.sample(
+        "process_start_time_seconds",
+        &[],
+        http.started
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs()),
+    );
+    p.family(
+        "pktito:threads",
+        "gauge",
+        "Threads for transcription, the workers' together (-t)",
+    );
+    p.sample(
+        "pktito:threads",
+        &[],
+        e.worker_threads.iter().sum::<usize>(),
+    );
+    p.family(
+        "pktito:workers",
+        "gauge",
+        "Workers: idle, busy with a job, or failed (no transcriber to be had, or the thread gone)",
+    );
     for (state, n) in [("idle", w.idle), ("busy", w.busy), ("failed", w.failed)] {
         p.sample("pktito:workers", &[("state", state)], n);
     }
-    p.family("pktito:max_requests", "gauge", "Requests taken at once (--max-requests); one more is a 503");
+    p.family(
+        "pktito:max_requests",
+        "gauge",
+        "Requests taken at once (--max-requests); one more is a 503",
+    );
     p.sample("pktito:max_requests", &[], e.max_requests());
-    p.family("pktito:num_requests_running", "gauge", "Requests being heard: decoded, cut into chunks, or their chunks heard");
+    p.family(
+        "pktito:num_requests_running",
+        "gauge",
+        "Requests being heard: decoded, cut into chunks, or their chunks heard",
+    );
     p.sample("pktito:num_requests_running", &[], s.running);
-    p.family("pktito:num_requests_waiting", "gauge", "Requests holding a slot and not yet begun: their uploads coming in, or in hand");
+    p.family(
+        "pktito:num_requests_waiting",
+        "gauge",
+        "Requests holding a slot and not yet begun: their uploads coming in, or in hand",
+    );
     p.sample("pktito:num_requests_waiting", &[], s.waiting);
-    p.family("pktito:http_requests_total", "counter", "Requests to the API (/v1) answered, by route and status");
+    p.family(
+        "pktito:http_requests_total",
+        "counter",
+        "Requests to the API (/v1) answered, by route and status",
+    );
     for ((route, status), n) in http.answers() {
-        p.sample("pktito:http_requests_total", &[("route", &route), ("code", &status.to_string())], n);
+        p.sample(
+            "pktito:http_requests_total",
+            &[("route", &route), ("code", &status.to_string())],
+            n,
+        );
     }
-    p.family("pktito:audio_seconds_total", "counter", "Audio transcribed, in seconds, by model");
+    p.family(
+        "pktito:audio_seconds_total",
+        "counter",
+        "Audio transcribed, in seconds, by model",
+    );
     for (m, seconds) in e.models().iter().zip(&s.heard) {
-        p.sample("pktito:audio_seconds_total", &[("model_name", &m.name)], seconds);
+        p.sample(
+            "pktito:audio_seconds_total",
+            &[("model_name", &m.name)],
+            seconds,
+        );
     }
-    p.family("pktito:audio_pending_seconds", "gauge", "Audio decoded and not yet transcribed, in seconds: the work in hand");
+    p.family(
+        "pktito:audio_pending_seconds",
+        "gauge",
+        "Audio decoded and not yet transcribed, in seconds: the work in hand",
+    );
     p.sample("pktito:audio_pending_seconds", &[], s.pending);
     p.family(
         "pktito:e2e_request_latency_seconds",
@@ -141,7 +217,11 @@ pub fn page(e: &Engine, http: &Http) -> String {
         "A transcription's time, from its upload in hand to its last chunk heard, by model",
     );
     for (m, h) in e.models().iter().zip(&s.took) {
-        p.histogram("pktito:e2e_request_latency_seconds", ("model_name", &m.name), h);
+        p.histogram(
+            "pktito:e2e_request_latency_seconds",
+            ("model_name", &m.name),
+            h,
+        );
     }
     p.0
 }

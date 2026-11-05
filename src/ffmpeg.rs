@@ -52,8 +52,22 @@ const STALL: Duration = Duration::from_secs(30);
 const ERR_KEPT: usize = 4096;
 /// Its arguments for a decode, after the program's name
 const ARGS: [&str; 16] = [
-    "-nostdin", "-hide_banner", "-loglevel", "error", "-threads", "1", "-protocol_whitelist", "fd", "-i", "fd:",
-    "-map", "0:a:0", "-c:a", "pcm_f32le", "-f", "wav",
+    "-nostdin",
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-threads",
+    "1",
+    "-protocol_whitelist",
+    "fd",
+    "-i",
+    "fd:",
+    "-map",
+    "0:a:0",
+    "-c:a",
+    "pcm_f32le",
+    "-f",
+    "wav",
 ];
 
 pub struct Ffmpeg {
@@ -72,13 +86,21 @@ impl Ffmpeg {
     pub fn new(path: &Path, max_seconds: f64) -> Result<Ffmpeg, String> {
         // the file given, not a name looked for on PATH
         let path = std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut f = Ffmpeg { path, version: String::new(), cpu: 60 + (max_seconds / 30.0).ceil() as u64 };
+        let mut f = Ffmpeg {
+            path,
+            version: String::new(),
+            cpu: 60 + (max_seconds / 30.0).ceil() as u64,
+        };
         let version = f.run(&["-hide_banner", "-version"])?;
         f.version = version.lines().next().unwrap_or("").to_string();
         let protocols = f.run(&["-hide_banner", "-protocols"])?;
         let input = protocols.split("Output:").next().unwrap_or("");
         if !input.lines().any(|l| l.trim() == "fd") {
-            return Err(format!("{}: {} reads no fd:, which ffmpeg 6.0 and later do", f.path.display(), f.version));
+            return Err(format!(
+                "{}: {} reads no fd:, which ffmpeg 6.0 and later do",
+                f.path.display(),
+                f.version
+            ));
         }
         Ok(f)
     }
@@ -92,7 +114,12 @@ impl Ffmpeg {
             .output()
             .map_err(|e| format!("{}: {e}", self.path.display()))?;
         if !out.status.success() {
-            return Err(format!("{}: {}: {}", self.path.display(), status(out.status), last_line(&out.stderr)));
+            return Err(format!(
+                "{}: {}: {}",
+                self.path.display(),
+                status(out.status),
+                last_line(&out.stderr)
+            ));
         }
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
@@ -108,13 +135,21 @@ impl Ffmpeg {
     }
 
     /// An upload to `rate` Hz mono, of max_samples at most
-    pub fn decode(&self, upload: Vec<u8>, rate: u32, max_samples: usize) -> Result<Audio, AudioError> {
+    pub fn decode(
+        &self,
+        upload: Vec<u8>,
+        rate: u32,
+        max_samples: usize,
+    ) -> Result<Audio, AudioError> {
         let fail = |why: String| AudioError::Unreadable(why);
-        let input = memfile(&upload).map_err(|e| fail(format!("cannot hand the upload to ffmpeg: {e}")))?;
+        let input =
+            memfile(&upload).map_err(|e| fail(format!("cannot hand the upload to ffmpeg: {e}")))?;
         drop(upload);
         let ((out, out_w), (mut stderr, err_w)) = match (pipe(), pipe()) {
             (Ok(o), Ok(e)) => (o, e),
-            (Err(e), _) | (_, Err(e)) => return Err(fail(format!("cannot make ffmpeg's pipes: {e}"))),
+            (Err(e), _) | (_, Err(e)) => {
+                return Err(fail(format!("cannot make ffmpeg's pipes: {e}")))
+            }
         };
         let mut child = self
             .command()
@@ -126,21 +161,28 @@ impl Ffmpeg {
             .spawn()
             .map_err(|e| fail(format!("cannot run ffmpeg: {e}")))?;
         let pid = child.id();
-        let errs = std::thread::Builder::new().name("pktito-ffmpeg".into()).spawn(move || {
-            let (mut kept, mut buf) = (Vec::new(), [0u8; 4096]);
-            while let Ok(n @ 1..) = stderr.read(&mut buf) {
-                kept.extend_from_slice(&buf[..n]);
-                if kept.len() > 2 * ERR_KEPT {
-                    kept.drain(..kept.len() - ERR_KEPT);
+        let errs = std::thread::Builder::new()
+            .name("pktito-ffmpeg".into())
+            .spawn(move || {
+                let (mut kept, mut buf) = (Vec::new(), [0u8; 4096]);
+                while let Ok(n @ 1..) = stderr.read(&mut buf) {
+                    kept.extend_from_slice(&buf[..n]);
+                    if kept.len() > 2 * ERR_KEPT {
+                        kept.drain(..kept.len() - ERR_KEPT);
+                    }
                 }
-            }
-            kept
+                kept
+            });
+        let w = Arc::new(Watch {
+            state: Mutex::new((false, Instant::now(), None)),
+            wake: Condvar::new(),
         });
-        let w = Arc::new(Watch { state: Mutex::new((false, Instant::now(), None)), wake: Condvar::new() });
         let all = Duration::from_secs(2 * self.cpu);
         let watcher = {
             let w = w.clone();
-            std::thread::Builder::new().name("pktito-ffmpeg".into()).spawn(move || watch(&w, pid, all))
+            std::thread::Builder::new()
+                .name("pktito-ffmpeg".into())
+                .spawn(move || watch(&w, pid, all))
         };
         let (Ok(errs), Ok(watcher)) = (errs, watcher) else {
             let _ = child.kill();
@@ -195,7 +237,11 @@ impl Ffmpeg {
                 Ok(a)
             }
             Err(e) if ended.success() => Err(e),
-            _ => Err(fail(format!("ffmpeg could not read it ({}): {}", status(ended), last_line(&err)))),
+            _ => Err(fail(format!(
+                "ffmpeg could not read it ({}): {}",
+                status(ended),
+                last_line(&err)
+            ))),
         }
     }
 }
@@ -228,7 +274,9 @@ fn watch(w: &Watch, pid: u32, all: Duration) {
             return;
         }
         let wait = (s.1 + STALL).min(end).saturating_duration_since(now);
-        let Ok((next, _)) = w.wake.wait_timeout(s, wait) else { return };
+        let Ok((next, _)) = w.wake.wait_timeout(s, wait) else {
+            return;
+        };
         s = next;
     }
 }
@@ -236,7 +284,15 @@ fn watch(w: &Watch, pid: u32, all: Duration) {
 /// Waits for pid to end, leaving it to be reaped
 fn exited(pid: u32) {
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-    while unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) } != 0 {
+    while unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOWAIT,
+        )
+    } != 0
+    {
         if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
             break;
         }
@@ -254,13 +310,19 @@ fn reap(pid: u32) -> io::Result<(ExitStatus, f64)> {
         }
     }
     let seconds = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
-    Ok((ExitStatus::from_raw(status), seconds(used.ru_utime) + seconds(used.ru_stime)))
+    Ok((
+        ExitStatus::from_raw(status),
+        seconds(used.ru_utime) + seconds(used.ru_stime),
+    ))
 }
 
 /// The limits, set in the child between fork and exec
 fn limits(cpu: u64) -> io::Result<()> {
     let set = |what, n: u64| {
-        let l = libc::rlimit { rlim_cur: n as libc::rlim_t, rlim_max: n as libc::rlim_t };
+        let l = libc::rlimit {
+            rlim_cur: n as libc::rlim_t,
+            rlim_max: n as libc::rlim_t,
+        };
         if unsafe { libc::setrlimit(what, &l) } == 0 {
             Ok(())
         } else {
@@ -299,8 +361,17 @@ fn memfile(bytes: &[u8]) -> io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
-    let p = std::env::temp_dir().join(format!("pktito-upload-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
-    let mut f = std::fs::OpenOptions::new().read(true).write(true).create_new(true).mode(0o600).open(&p)?;
+    let p = std::env::temp_dir().join(format!(
+        "pktito-upload-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&p)?;
     std::fs::remove_file(&p)?;
     write_whole(&mut f, bytes)?;
     Ok(f)
@@ -352,7 +423,12 @@ fn status(s: ExitStatus) -> String {
 /// The last line ffmpeg wrote, less its "[component @ 0x...] "s
 fn last_line(err: &[u8]) -> String {
     let s = String::from_utf8_lossy(err);
-    let mut line = s.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("no message");
+    let mut line = s
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .last()
+        .unwrap_or("no message");
     while let (true, Some(i)) = (line.starts_with('['), line.find("] ")) {
         line = &line[i + 2..];
     }

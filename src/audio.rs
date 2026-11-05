@@ -31,13 +31,21 @@ pub struct Audio {
 /// to the CLI's calls anyway.
 const READ_FRAMES: usize = 16384;
 
-pub fn decode(bytes: Vec<u8>, rate: u32, max_samples: usize, ffmpeg: Option<&Ffmpeg>) -> Result<Audio, AudioError> {
+pub fn decode(
+    bytes: Vec<u8>,
+    rate: u32,
+    max_samples: usize,
+    ffmpeg: Option<&Ffmpeg>,
+) -> Result<Audio, AudioError> {
     if bytes.len() >= 12 && matches!(&bytes[0..4], b"RIFF" | b"RF64" | b"FORM") {
         wav(&bytes, rate, max_samples)
     } else if let Some(f) = ffmpeg {
         f.decode(bytes, rate, max_samples)
     } else {
-        Err(AudioError::Unreadable("not WAV or AIFF: this server reads other formats only through ffmpeg (--ffmpeg)".into()))
+        Err(AudioError::Unreadable(
+            "not WAV or AIFF: this server reads other formats only through ffmpeg (--ffmpeg)"
+                .into(),
+        ))
     }
 }
 
@@ -79,7 +87,8 @@ pub(crate) fn read(
 ) -> Result<Audio, AudioError> {
     let mut info = PkWavInfo::default();
     let mut err = [0 as c_char; 256];
-    let w = unsafe { ffi::pk_wav_open_file(f, name.as_ptr(), &mut info, err.as_mut_ptr(), err.len()) };
+    let w =
+        unsafe { ffi::pk_wav_open_file(f, name.as_ptr(), &mut info, err.as_mut_ptr(), err.len()) };
     if w.is_null() {
         return Err(AudioError::Unreadable(ffi::message(&err)));
     }
@@ -106,7 +115,11 @@ pub(crate) fn read(
         if unsafe { ffi::pk_wav_status(w, err.as_mut_ptr(), err.len()) } != 0 {
             tracing::warn!("{}: {}", name.to_string_lossy(), ffi::message(&err));
         }
-        Ok(Audio { samples: out, rate: info.rate, channels: info.channels })
+        Ok(Audio {
+            samples: out,
+            rate: info.rate,
+            channels: info.channels,
+        })
     })();
     unsafe { ffi::pk_wav_close(w) };
     result
