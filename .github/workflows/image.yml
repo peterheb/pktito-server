@@ -10,7 +10,7 @@ on:
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
-  LIBPKTITO: d57077718e6de1f675202c28b1eaa4c538caac43 # libpktito 0.9.6
+  LIBPKTITO: 731cc3b4650d5fb6e59979692889475aef80aea7 # libpktito v0.9.6
 
 permissions:
   contents: read
