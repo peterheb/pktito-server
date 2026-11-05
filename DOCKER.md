@@ -1,24 +1,29 @@
 # Running pktito-server in Docker
 
-The image holds only the server. The model stays on the host and is mounted read-only. Run the commands below from the directory that holds both trees: they leave the server on this machine alone, behind a key.
+The image holds only the server. The model stays on the host and is mounted read-only. Run the commands below from the directory that holds libpktito's tree: they leave the server on this machine alone, behind a key.
 
-1. **Get the sources.** Put `libpktito` and `pktito-server` side by side, with the server's `Dockerfile` and `Dockerfile.dockerignore` in `pktito-server/`. The libpktito needs `pk_steps`, as the README's Build says. The build needs BuildKit, which is the default from Docker 23.
+1. **Get the image.** GitHub's registry has it for x86-64 and 64-bit Arm, and Docker pulls the one for this machine. libpktito picks its kernels by the CPU when the server starts, so it runs on any machine of its architecture. The `tag` gives it the name the steps below use.
 
-2. **Build.** Build on the architecture you will run on. libpktito picks its kernels by the CPU when the server starts, so the image runs on any machine of that architecture.
+   ```sh
+   docker pull ghcr.io/peterheb/pktito-server:0.9.6
+   docker tag ghcr.io/peterheb/pktito-server:0.9.6 pktito-server
+   ```
+
+   Or build it, on the architecture you will run on: put `libpktito` and `pktito-server` side by side, with the server's `Dockerfile` and `Dockerfile.dockerignore` in `pktito-server/`. The libpktito needs `pk_steps` and `pk_sentences`, as the README's Build says, and the build needs BuildKit, the default from Docker 23.
 
    ```sh
    docker build -f pktito-server/Dockerfile -t pktito-server .
    ```
 
-3. **Make a model.** libpktito's README, "Then a model", makes `libpktito/models/parakeet-tdt-0.6b-v2.pkf` once, with Python and numpy. It must be readable by everyone, since the server runs as uid 65532.
+2. **Make a model.** libpktito's README, "Then a model", makes `libpktito/models/parakeet-tdt-0.6b-v2.pkf` once, with Python and numpy, in a clone of https://github.com/peterheb/libpktito. It must be readable by everyone, since the server runs as uid 65532.
 
-4. **Create an API key.**
+3. **Create an API key.**
 
    ```sh
    (umask 077; echo "PKTITO_API_KEY=$(openssl rand -hex 24)" > pktito.env)
    ```
 
-5. **Run it.** Choose `-t` from the README's table.
+4. **Run it.** Choose `-t` from the README's table.
 
    ```sh
    docker run -d --name pktito-server --restart unless-stopped --init \
@@ -35,7 +40,7 @@ The image holds only the server. The model stays on the host and is mounted read
 
    The image listens on port 8000 on all of the container's addresses, and `-p` decides who can reach it: here, this machine alone. Passing `-l` stops the server, because the image already sets it. To listen elsewhere inside the container, put `--entrypoint pktito-server` before the image and pass `-l` with the other arguments.
 
-6. **Check it.**
+5. **Check it.**
 
    ```sh
    curl -s 127.0.0.1:8000/health
@@ -49,7 +54,7 @@ The image holds only the server. The model stays on the host and is mounted read
 
 ## Serving other machines
 
-The server above answers this machine alone. To serve others, replace `127.0.0.1` in `-p 127.0.0.1:8000:8000` with the address of this machine that they reach it at, for example `-p 192.168.1.20:8000:8000`, and run the container again (`docker rm -f pktito-server`, then step 5). Keep the key: anyone who can reach that address can send it uploads.
+The server above answers this machine alone. To serve others, replace `127.0.0.1` in `-p 127.0.0.1:8000:8000` with the address of this machine that they reach it at, for example `-p 192.168.1.20:8000:8000`, and run the container again (`docker rm -f pktito-server`, then step 4). Keep the key: anyone who can reach that address can send it uploads.
 
 ## Formats other than WAV and AIFF
 

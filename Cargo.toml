@@ -1,6 +1,6 @@
 [package]
 name = "pktito-server"
-version = "0.1.0"
+version = "0.9.6"
 edition = "2021"
 description = "Parakeet TDT speech recognition over HTTP, OpenAI's transcription API, on libpktito"
 license = "MIT"

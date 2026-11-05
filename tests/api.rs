@@ -154,10 +154,10 @@ async fn subtitles_are_pktito_cs() {
 async fn openais_formats_carry_pktito_cs_text() {
     let Some(m) = common::model("v2") else { return };
     let wav = common::data("test.wav");
-    let path = common::model_path("v2");
-    // pktito-c writes a line a chunk; OpenAI's text is the chunks' with a space between
-    let lines = common::cli(&["-t", "4", "-m", path.to_str().unwrap(), "tests/data/test.wav"]);
-    let text = String::from_utf8(lines).unwrap().lines().collect::<Vec<_>>().join(" ");
+    // OpenAI's text is pktito-c's chunks', a space between
+    let cli = json(&common::data("test.v2.json"));
+    let chunks = cli["chunks"].as_array().unwrap().iter().map(|c| c["text"].as_str().unwrap());
+    let text = chunks.filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" ");
     let app = app(vec![m.clone()], false, None);
 
     let fields: [(&str, &[u8]); 2] = [("file", &wav), ("model", b"whisper-1")];
@@ -180,7 +180,6 @@ async fn openais_formats_carry_pktito_cs_text() {
     let (status, _, body) = post(&app, "/v1/audio/transcriptions", &fields, None).await;
     assert_eq!(status, StatusCode::OK);
     let v = json(&body);
-    let cli = json(&common::data("test.v2.json"));
     assert_eq!(v["text"], text.as_str());
     assert_eq!(v["language"], "english");
     assert_eq!(v["duration"], 60.0);

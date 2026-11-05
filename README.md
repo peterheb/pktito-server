@@ -5,8 +5,8 @@ libpktito: NVIDIA's Parakeet TDT
 0.6B v2 (English) and v3 (25 European languages) on the CPU. It is meant for
 a machine with other work to do, an LLM beside it, say. The server takes the
 share of the cores it is given, and requests share that between them. Each
-request's answer is the transcript `pktito-c` gives the same recording,
-byte for byte.
+request's answer is the transcript `pktito-c` gives the same recording:
+its `--json` byte for byte, and its text in OpenAI's formats.
 
 ```
 $ pktito-server -m parakeet-tdt-0.6b-v3.pkf -t 8
@@ -17,7 +17,7 @@ $ curl -s -F file=@talk.wav localhost:8000/v1/audio/transcriptions
 ## Build
 
 It needs a libpktito with the step-wise transcription, `pk_steps`, and
-`pk_sentences` (core/pktito.h; main from b937d71):
+`pk_sentences` (core/pktito.h; libpktito 0.9.6, or main from b937d71):
 
 ```sh
 cd libpktito && make libpktito.a
@@ -27,7 +27,9 @@ cd ../pktito-server && cargo build --release       # PKTITO_DIR=... for a tree n
 It runs on Linux and macOS. Windows is not supported: the WAV reader takes
 an upload through `fmemopen`, which Windows does not have.
 
-DOCKER.md runs it in a container.
+DOCKER.md runs it in a container, from the image on GitHub's registry
+(linux/amd64 and linux/arm64) or one built here. The registry's is built
+by .github/workflows/image.yml, against the libpktito commit it names.
 
 ## Run
 
