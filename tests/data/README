@@ -1,0 +1,7 @@
+esds-no-descriptor.m4a: the ftyp and moov of an M4A ffmpeg made (3 s of
+AAC), its mdat emptied, and its esds atom's ES_Descriptor tag, 3, made
+0x80, as a fuzzer of the server's decoding found it. symphonia 0.5.5's
+MP4 reader panicked on it, unwrapping the descriptor it lacks
+(symphonia-format-isomp4, src/atoms/esds.rs:79), which is why the server
+decodes such files through ffmpeg, in a process of its own (src/ffmpeg.rs).
+No audio is in it: ffmpeg refuses it.

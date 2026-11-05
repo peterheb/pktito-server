@@ -1,0 +1,9 @@
+*
+!libpktito
+!pktito-server
+**/target
+**/.git
+**/*.a
+**/*.o
+libpktito/models
+**/.venv*

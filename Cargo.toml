@@ -1,0 +1,26 @@
+[package]
+name = "pktito-server"
+version = "0.1.0"
+edition = "2021"
+description = "Parakeet TDT speech recognition over HTTP, OpenAI's transcription API, on libpktito"
+license = "MIT"
+publish = false
+
+[dependencies]
+axum = { version = "0.8", features = ["multipart"] }
+clap = { version = "4", features = ["derive", "env"] }
+futures = "0.3"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+libc = "0.2"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time", "io-util"] }
+tower = { version = "0.5", features = ["util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+
+[profile.release]
+debug = 1
