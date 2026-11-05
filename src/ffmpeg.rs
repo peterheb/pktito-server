@@ -426,8 +426,7 @@ fn last_line(err: &[u8]) -> String {
     let mut line = s
         .lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .last()
+        .rfind(|l| !l.is_empty())
         .unwrap_or("no message");
     while let (true, Some(i)) = (line.starts_with('['), line.find("] ")) {
         line = &line[i + 2..];
