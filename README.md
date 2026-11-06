@@ -136,7 +136,52 @@ A request alone, the server warm, best of 5, in seconds:
 
 So on a GB10, `-w 4`, four workers of 5 threads, is the best of these at
 every load. It costs 45 ms against one wide worker on a recording of one
-chunk, and nothing from three chunks up.
+chunk, and nothing from three chunks up. Smaller workers, below, hear more
+at once.
+
+### Smaller workers
+
+On 2026-11-06, pktito-server 0.9.6 with the v2 model and `-t` at the
+vCPUs gave these, on three EC2 machines of 16 vCPUs and a GB10's 20 cores.
+Every answer was the same at every `-w`, and none failed.
+
+- **Alone:** AliceBench's 12 chapters one at a time, the mean of 2 runs
+  (within 1.7% of each other).
+- **A 30 s clip:** 12 clips, from 300 s into each chapter, one at a time,
+  the median of 24 over 2 runs. A clip is one chunk, so one worker's
+  threads hear it.
+- **At once:** the 12 chapters sent two for each worker at once, at most
+  all 12, in one pass. Read it against the same machine's other rows only.
+
+| machine                      | threads a worker | alone  | a 30 s clip | at once |
+| ---------------------------- | ---------------- | ------ | ----------- | ------- |
+| c9g.4xlarge (Graviton5)      | 4                | 183.1x | 0.53 s      | 196.8x  |
+|                              | 2                | 177.3x | 1.03 s      | 200.4x  |
+|                              | 1                | 161.6x | 2.03 s      | 200.5x  |
+| c8a.4xlarge (Zen 5)          | 4                | 330.8x | 0.29 s      | 356.2x  |
+|                              | 2                | 333.0x | 0.53 s      | 387.3x  |
+|                              | 1                | 329.0x | 0.88 s      | 407.9x  |
+| c8i.4xlarge (Granite Rapids) | 4                | 197.1x | 0.27 s      | 207.1x  |
+|                              | 2                | 203.1x | 0.47 s      | 216.9x  |
+|                              | 1                | 206.0x | 0.82 s      | 223.8x  |
+| GB10                         | 4                | 208.8x | 0.32 s      | 218.5x  |
+|                              | 2                | 230.5x | 0.61 s      | 249.8x  |
+|                              | 1                | 231.4x | 1.20 s      | 282.0x  |
+
+- **A recording of one chunk takes as long as its worker's threads make
+  it.** Against 4 threads a worker, a 30 s clip took 1.7 to 2.0 times as
+  long at 2, and 3.0 to 3.9 times at 1.
+- **At once, smaller workers hear more:** 2% to 14% more at 2 threads a
+  worker, and 2% to 29% at 1, the most on the GB10.
+- **Alone, the GB10 is 10% faster** at 2 threads a worker or 1. At 2, c9g
+  is 3.2% slower, c8a level and c8i 3.0% faster; at 1, c9g is 12% slower
+  and c8i 4.5% faster.
+
+So the default is a worker for every 4 threads. It hears a recording of one
+chunk, up to about 30 s, in about half the time 2 threads a worker take,
+and a long recording alone is at most 10% slower (the GB10). A server kept
+busy hears more with smaller workers: `-w` at half the threads, or at all
+of them.
 
 ### Threads in fours
 

@@ -114,8 +114,10 @@ fn main() -> ExitCode {
     }
     // A worker for every 4 threads: libpktito's own split of a transcriber's
     // threads into lanes (core/asr.h, PK_LANE_THREADS), the threads 4 doesn't
-    // divide dealt among them. -w 1, one worker with every thread, hears a
-    // one-chunk request as fast as pktito-c does.
+    // divide dealt among them. Smaller workers hear more at once, but a
+    // one-chunk request about twice as slowly on half the threads (README,
+    // "Smaller workers"); -w 1, one worker with every thread, hears it as
+    // fast as pktito-c does.
     let workers = args.workers.unwrap_or((threads / 4).max(1));
     if workers == 0 || workers > threads {
         eprintln!("pktito-server: -w: from 1 to the threads ({threads})");
