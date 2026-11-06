@@ -277,16 +277,16 @@ loaded: `--max-requests 4 --max-hours 1 --max-upload-mb 128` comes to about
 
 `POST /v1/audio/transcriptions` takes a multipart form:
 
-| field                       |                                                                                                                                                              |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `file`                      | the recording (see "Audio" below)                                                                                                                            |
-| `model`                     | a model's name, from `GET /v1/models`. Any other name (an OpenAI client's `whisper-1`) gets the first model that writes `language`, or the first model given |
-| `language`                  | ISO 639-1. A model that does not write it is a 400. Parakeet finds the language itself, so this only picks the model                                         |
-| `response_format`           | `json` (the default), `text`, `srt`, `vtt`, `verbose_json`, `pktito_json`                                                                                    |
-| `timestamp_granularities[]` | with `verbose_json`: `segment` (the default), `word`, or both                                                                                                |
-| `stream`                    | `true`: server-sent events, OpenAI's `transcript.text.delta` for each chunk as it is done, in order, then `transcript.text.done`                             |
-| `retry`, `context`          | pktito's own, both on by default. `false` is pktito-c's `--no-retry` or `--no-context`; with both off, each chunk is NeMo's transcript of it                 |
-| `prompt`, `temperature`     | read and left: a transducer has nothing they set                                                                                                             |
+| field                       |                                                                                                                                                                                     |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `file`                      | the recording (see "Audio" below)                                                                                                                                                   |
+| `model`                     | a model's name, from `GET /v1/models`. Any other name (an OpenAI client's `whisper-1`) gets the first model that writes `language`, or the first model given                        |
+| `language`                  | ISO 639-1 (`en`); a locale (`en-US`) is its language, and `auto` is none. A model that does not write it is a 400. Parakeet finds the language itself, so this only picks the model |
+| `response_format`           | `json` (the default), `text`, `srt`, `vtt`, `verbose_json`, `pktito_json`                                                                                                           |
+| `timestamp_granularities[]` | with `verbose_json`: `segment` (the default), `word`, or both                                                                                                                       |
+| `stream`                    | `true`: server-sent events, OpenAI's `transcript.text.delta` for each chunk as it is done, in order, then `transcript.text.done`                                                    |
+| `retry`, `context`          | pktito's own, both on by default. `false` is pktito-c's `--no-retry` or `--no-context`; with both off, each chunk is NeMo's transcript of it                                        |
+| `prompt`, `temperature`     | read and left: a transducer has nothing they set                                                                                                                                    |
 
 **Audio.** WAV and AIFF go through libpktito's own reader and resampler, the
 ones pktito-c uses: any rate, any channel count, brought to 16 kHz mono. A

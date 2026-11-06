@@ -403,7 +403,7 @@ async fn errors_are_openais() {
     );
 
     type Fields<'a> = &'a [(&'a str, &'a [u8])];
-    let cases: [(Fields, &str); 5] = [
+    let cases: [(Fields, &str); 6] = [
         (&[("model", b"whisper-1")], "file"),
         (
             &[("file", &wav), ("response_format", b"xml")],
@@ -422,6 +422,7 @@ async fn errors_are_openais() {
             ],
             "language",
         ),
+        (&[("file", &wav), ("language", b"english")], "language"),
     ];
     for (fields, param) in cases {
         let (status, _, body) = post(&app, "/v1/audio/transcriptions", fields, key).await;
@@ -432,14 +433,19 @@ async fn errors_are_openais() {
             (Some("invalid_request_error"), Some(param))
         );
     }
-    let (status, _, _) = post(
-        &app,
-        "/v1/audio/transcriptions",
-        &[("file", &wav), ("language", b"en")],
-        key,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
+    // a code, nothing, Whisper servers' "auto", a locale for its language
+    let languages: [&[u8]; 6] = [b"en", b"", b"auto", b"Auto", b"en-US", b"en_GB"];
+    for language in languages {
+        let (status, _, _) = post(
+            &app,
+            "/v1/audio/transcriptions",
+            &[("file", &wav), ("language", language)],
+            key,
+        )
+        .await;
+        let l = String::from_utf8_lossy(language);
+        assert_eq!(status, StatusCode::OK, "{l}");
+    }
 }
 
 /// A metrics page's samples, each line not a comment checked against the

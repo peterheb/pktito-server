@@ -229,6 +229,15 @@ fn boolean(param: &'static str, s: &str) -> Result<bool, ApiError> {
     }
 }
 
+/// A request's language, a model's two-letter code: a locale ("en-US",
+/// "pt_BR") is its language, and "auto", Whisper servers' word for none,
+/// is none
+fn language(s: &str) -> Option<String> {
+    let lower = s.trim().to_lowercase();
+    let l = lower.split(['-', '_']).next().unwrap_or_default();
+    (!l.is_empty() && l != "auto").then(|| l.to_string())
+}
+
 async fn form(mut mp: Multipart) -> Result<Form, ApiError> {
     let mut f = Form::default();
     while let Some(field) = mp.next_field().await? {
@@ -236,10 +245,7 @@ async fn form(mut mp: Multipart) -> Result<Form, ApiError> {
         match name.as_str() {
             "file" => f.file = Some(field.bytes().await?.into()),
             "model" => f.model = field.text().await?.trim().to_string(),
-            "language" => {
-                let l = field.text().await?.trim().to_lowercase();
-                f.language = (!l.is_empty()).then_some(l);
-            }
+            "language" => f.language = language(&field.text().await?),
             "response_format" => f.response_format = Some(field.text().await?.trim().to_string()),
             "timestamp_granularities[]" | "timestamp_granularities" => {
                 f.granularities.push(field.text().await?.trim().to_string())
