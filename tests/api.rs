@@ -218,21 +218,27 @@ async fn subtitles_are_pktito_cs() {
     }
 }
 
+/// OpenAI's text for test.wav: pktito-c's lines, its sentences, a space
+/// between them
+fn cli_text(model: &str) -> String {
+    let path = common::model_path(model);
+    let out = common::cli(&[
+        "-t",
+        "4",
+        "-m",
+        path.to_str().unwrap(),
+        "tests/data/test.wav",
+    ]);
+    let out = String::from_utf8(out).unwrap();
+    out.lines().collect::<Vec<_>>().join(" ")
+}
+
 #[tokio::test]
 async fn openais_formats_carry_pktito_cs_text() {
     let Some(m) = common::model("v2") else { return };
     let wav = common::data("test.wav");
-    // OpenAI's text is pktito-c's chunks', a space between
+    let text = cli_text("v2");
     let cli = json(&common::data("test.v2.json"));
-    let chunks = cli["chunks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| c["text"].as_str().unwrap());
-    let text = chunks
-        .filter(|t| !t.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
     let app = app(vec![m.clone()], false, None);
 
     let fields: [(&str, &[u8]); 2] = [("file", &wav), ("model", b"whisper-1")];
@@ -304,35 +310,44 @@ async fn openais_formats_carry_pktito_cs_text() {
 }
 
 #[tokio::test]
-async fn a_stream_is_the_text_chunk_by_chunk() {
-    let Some(m) = common::model("v2") else { return };
+async fn a_stream_is_the_text_sentence_by_sentence() {
     let wav = common::data("test.wav");
-    let app = app(vec![m.clone()], false, None);
-    let (_, _, body) = post(&app, "/v1/audio/transcriptions", &[("file", &wav)], None).await;
-    let text = json(&body)["text"].as_str().unwrap().to_string();
+    let mut app = None;
+    // the multilingual model's sentences wait on its language as pktito-c's do
+    for v in ["v2", "v3"] {
+        let Some(m) = common::model(v) else { continue };
+        let a = app.insert(self::app(vec![m.clone()], false, None));
+        let text = cli_text(v);
+        let (_, _, body) = post(a, "/v1/audio/transcriptions", &[("file", &wav)], None).await;
+        assert_eq!(json(&body)["text"], text.as_str(), "{v}");
 
-    let fields: [(&str, &[u8]); 2] = [("file", &wav), ("stream", b"true")];
-    let (status, ctype, body) = post(&app, "/v1/audio/transcriptions", &fields, None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(ctype.starts_with("text/event-stream"));
-    let events: Vec<Value> = String::from_utf8(body)
-        .unwrap()
-        .lines()
-        .filter_map(|l| l.strip_prefix("data: "))
-        .map(|d| json(d.as_bytes()))
-        .collect();
-    let (last, deltas) = events.split_last().unwrap();
-    assert!(deltas.len() >= 2, "a delta a chunk: {deltas:?}");
-    let streamed: String = deltas
-        .iter()
-        .map(|e| {
-            assert_eq!(e["type"], "transcript.text.delta");
-            e["delta"].as_str().unwrap()
-        })
-        .collect();
-    assert_eq!(streamed, text);
-    assert_eq!(last["type"], "transcript.text.done");
-    assert_eq!(last["text"], text.as_str());
+        let fields: [(&str, &[u8]); 2] = [("file", &wav), ("stream", b"true")];
+        let (status, ctype, body) = post(a, "/v1/audio/transcriptions", &fields, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(ctype.starts_with("text/event-stream"));
+        let events: Vec<Value> = String::from_utf8(body)
+            .unwrap()
+            .lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .map(|d| json(d.as_bytes()))
+            .collect();
+        let (last, deltas) = events.split_last().unwrap();
+        assert!(
+            deltas.len() >= 2,
+            "{v}: a delta for each chunk that ends a sentence: {deltas:?}"
+        );
+        let streamed: String = deltas
+            .iter()
+            .map(|e| {
+                assert_eq!(e["type"], "transcript.text.delta");
+                e["delta"].as_str().unwrap()
+            })
+            .collect();
+        assert_eq!(streamed, text, "{v}");
+        assert_eq!(last["type"], "transcript.text.done");
+        assert_eq!(last["text"], text.as_str(), "{v}");
+    }
+    let Some(app) = app else { return };
 
     // an upload that is not audio is an error before the stream
     let fields: [(&str, &[u8]); 2] = [("file", b"not audio at all"), ("stream", b"true")];

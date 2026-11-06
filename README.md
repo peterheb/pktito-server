@@ -277,16 +277,16 @@ loaded: `--max-requests 4 --max-hours 1 --max-upload-mb 128` comes to about
 
 `POST /v1/audio/transcriptions` takes a multipart form:
 
-| field                       |                                                                                                                                                                                     |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `file`                      | the recording (see "Audio" below)                                                                                                                                                   |
-| `model`                     | a model's name, from `GET /v1/models`. Any other name (an OpenAI client's `whisper-1`) gets the first model that writes `language`, or the first model given                        |
-| `language`                  | ISO 639-1 (`en`); a locale (`en-US`) is its language, and `auto` is none. A model that does not write it is a 400. Parakeet finds the language itself, so this only picks the model |
-| `response_format`           | `json` (the default), `text`, `srt`, `vtt`, `verbose_json`, `pktito_json`                                                                                                           |
-| `timestamp_granularities[]` | with `verbose_json`: `segment` (the default), `word`, or both                                                                                                                       |
-| `stream`                    | `true`: server-sent events, OpenAI's `transcript.text.delta` for each chunk as it is done, in order, then `transcript.text.done`                                                    |
-| `retry`, `context`          | pktito's own, both on by default. `false` is pktito-c's `--no-retry` or `--no-context`; with both off, each chunk is NeMo's transcript of it                                        |
-| `prompt`, `temperature`     | read and left: a transducer has nothing they set                                                                                                                                    |
+| field                       |                                                                                                                                                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `file`                      | the recording (see "Audio" below)                                                                                                                                                                |
+| `model`                     | a model's name, from `GET /v1/models`. Any other name (an OpenAI client's `whisper-1`) gets the first model that writes `language`, or the first model given                                     |
+| `language`                  | ISO 639-1 (`en`); a locale (`en-US`) is its language, and `auto` is none. A model that does not write it is a 400. Parakeet finds the language itself, so this only picks the model              |
+| `response_format`           | `json` (the default), `text`, `srt`, `vtt`, `verbose_json`, `pktito_json`                                                                                                                        |
+| `timestamp_granularities[]` | with `verbose_json`: `segment` (the default), `word`, or both                                                                                                                                    |
+| `stream`                    | `true`: server-sent events, OpenAI's `transcript.text.delta` for the sentences each chunk ends, in order (a sentence that runs on waits for the chunk that ends it), then `transcript.text.done` |
+| `retry`, `context`          | pktito's own, both on by default. `false` is pktito-c's `--no-retry` or `--no-context`; with both off, each chunk is NeMo's transcript of it                                                     |
+| `prompt`, `temperature`     | read and left: a transducer has nothing they set                                                                                                                                                 |
 
 **Audio.** WAV and AIFF go through libpktito's own reader and resampler, the
 ones pktito-c uses: any rate, any channel count, brought to 16 kHz mono. A
@@ -346,7 +346,8 @@ test.wav after them gave pktito-c's bytes.
 
 **The formats:**
 
-- `json` is `{"text": ...}`: the chunks' texts, a space between them.
+- `json` is `{"text": ...}`: the transcript's sentences, as `pk_sentences`
+  finds them and pktito-c prints them a line each, a space between them.
 - `text` is that text and a newline.
 - `srt` and `vtt` are pktito-c's `--srt` and `--vtt`: libpktito's caption
   cues, one or two lines of 42 characters.
@@ -497,8 +498,8 @@ hold:
     stereo 22.05 kHz WAV against pktito-c's `--json`.
   - `srt` and `vtt` against pktito-c's `--srt` and `--vtt`.
   - The VAD against `pktito-c segments`.
-  - `json`, `text`, `verbose_json` and the stream: pktito-c's text and
-    word times.
+  - `json`, `text`, `verbose_json` and the stream: pktito-c's lines and
+    word times, the stream with both models.
   - The errors, the key and the models.
   - `/health`, `/ping`, `/version` and `/metrics` without the key, a
     transcription's answer, audio and time in the metrics after it, and the

@@ -2,13 +2,15 @@
 //! answer here compares with the CLI's (tests/api.rs holds it to libpktito's
 //! tests/data/test.v2.json), and srt and vtt are pktito-c --srt's and
 //! --vtt's: the same words, times, cues and characters. json, text and
-//! verbose_json are OpenAI's; verbose_json's segments are the transcript's
-//! sentences (pk_sentences).
+//! verbose_json are OpenAI's. Their text is the transcript's sentences
+//! (pk_sentences), the lines pktito-c prints, with a space between them;
+//! verbose_json's segments are those sentences.
 
 use crate::ffi::{self, Chunk, Model, PkTok, PK_CUE_PAUSE};
 use serde_json::{json, Value};
 use std::ffi::CString;
 use std::fmt::Write;
+use std::ops::Range;
 
 pub struct Word {
     pub text: String,
@@ -94,15 +96,20 @@ impl Transcript<'_> {
         self.samples as f64 / self.model.rate as f64
     }
 
-    /// The chunks' texts, a space between them
-    pub fn text(&self) -> String {
-        let texts: Vec<&str> = self
-            .chunks
-            .iter()
-            .map(|c| c.text.as_str())
-            .filter(|t| !t.is_empty())
-            .collect();
-        texts.join(" ")
+    /// Its sentences, its chunks given in order. None if memory runs out
+    pub fn sentences(&self) -> Option<Vec<Sentence>> {
+        let mut s = Sentences::new(self.model);
+        let mut out = Vec::new();
+        for c in &self.chunks {
+            out.extend(s.add(self.model, c)?);
+        }
+        out.extend(s.finish(self.model)?);
+        Some(out)
+    }
+
+    /// Its sentences' texts, a space between them. None if memory runs out
+    pub fn text(&self) -> Option<String> {
+        Some(text_of(&self.sentences()?))
     }
 
     fn words(&self) -> impl Iterator<Item = &Word> {
@@ -122,6 +129,79 @@ impl Transcript<'_> {
 
 fn cstring(s: &str) -> CString {
     CString::new(s).unwrap_or_default() // a word's text holds no NUL
+}
+
+/// A sentence: its tokens' place among the recording's, and its text
+pub struct Sentence {
+    pub toks: Range<usize>,
+    pub text: String,
+}
+
+/// Sentences' texts, a space between them
+pub fn text_of(sentences: &[Sentence]) -> String {
+    let texts: Vec<&str> = sentences.iter().map(|s| s.text.as_str()).collect();
+    texts.join(" ")
+}
+
+/// A recording's sentences as its chunks come, as pktito-c prints them
+/// (core/cli.c, print_sentences). A sentence that runs on into the next
+/// chunk waits for it. The language is the English model's, or what the
+/// multilingual model's words say once they say it.
+pub struct Sentences {
+    lang: Option<String>,
+    /// The words so far, while the language is not known
+    words: Vec<CString>,
+    /// The tokens in no sentence yet
+    tail: Vec<PkTok>,
+    /// The first's place among the recording's tokens
+    at: usize,
+}
+
+impl Sentences {
+    pub fn new(m: &Model) -> Sentences {
+        Sentences {
+            lang: m.english.then(|| "en".to_string()),
+            words: Vec::new(),
+            tail: Vec::new(),
+            at: 0,
+        }
+    }
+
+    /// The sentences that end in a chunk. None if memory runs out
+    pub fn add(&mut self, m: &Model, c: &Heard) -> Option<Vec<Sentence>> {
+        self.tail.extend_from_slice(&c.toks);
+        if self.lang.is_none() && !c.toks.is_empty() {
+            self.words.extend(c.words.iter().map(|w| cstring(&w.text)));
+            self.lang = ffi::language(&self.words);
+        }
+        self.take(m, false)
+    }
+
+    /// The sentences the recording's end ends. None if memory runs out
+    pub fn finish(&mut self, m: &Model) -> Option<Vec<Sentence>> {
+        self.take(m, true)
+    }
+
+    fn take(&mut self, m: &Model, done: bool) -> Option<Vec<Sentence>> {
+        let found = m.sentences(&self.tail, self.lang.as_deref(), done)?;
+        let mut out = Vec::new();
+        for s in &found {
+            let r = s.first as usize..(s.first + s.n) as usize;
+            let text = m.text(&self.tail[r.clone()]);
+            if !text.is_empty() {
+                out.push(Sentence {
+                    toks: self.at + r.start..self.at + r.end,
+                    text,
+                });
+            }
+        }
+        if let Some(s) = found.last() {
+            let used = (s.first + s.n) as usize;
+            self.tail.drain(..used);
+            self.at += used;
+        }
+        Some(out)
+    }
 }
 
 /// printf's %.*f: Rust's {:.*} rounds a value's exact binary expansion to
@@ -275,9 +355,9 @@ pub fn subtitles(t: &Transcript, vtt: bool) -> Option<String> {
     Some(s)
 }
 
-/// OpenAI's json
-pub fn json(t: &Transcript) -> Value {
-    json!({ "text": t.text() })
+/// OpenAI's json. None if memory runs out
+pub fn json(t: &Transcript) -> Option<Value> {
+    Some(json!({ "text": t.text()? }))
 }
 
 /// The English names OpenAI's verbose_json gives the languages
@@ -324,32 +404,26 @@ fn round(x: f64, places: i32) -> f64 {
 /// temperature) are left out, not made up. None if memory runs out.
 pub fn verbose_json(t: &Transcript, segments: bool, words: bool) -> Option<Value> {
     let language = t.language();
+    let sentences = t.sentences()?;
     let mut v = json!({
         "task": "transcribe",
         "language": language.as_ref().map(|l| language_name(l).to_string()),
         "duration": round(t.seconds(), 3),
-        "text": t.text(),
+        "text": text_of(&sentences),
     });
     if segments {
-        let toks: Vec<PkTok> = t
-            .chunks
-            .iter()
-            .flat_map(|c| c.toks.iter().copied())
-            .collect();
-        let times: Vec<&Token> = t.chunks.iter().flat_map(|c| c.tokens.iter()).collect();
-        let segs: Vec<Value> = t
-            .model
-            .sentences(&toks, language.as_deref())?
+        let toks: Vec<&Token> = t.chunks.iter().flat_map(|c| c.tokens.iter()).collect();
+        let segs: Vec<Value> = sentences
             .iter()
             .enumerate()
             .map(|(id, s)| {
-                let (a, b) = (s.first as usize, (s.first + s.n) as usize);
+                let toks = &toks[s.toks.clone()];
                 json!({
                     "id": id,
-                    "start": round(times[a].start, 3),
-                    "end": round(times[b - 1].end, 3),
-                    "text": t.model.text(&toks[a..b]),
-                    "tokens": toks[a..b].iter().map(|tk| tk.id).collect::<Vec<_>>(),
+                    "start": round(toks[0].start, 3),
+                    "end": round(toks[toks.len() - 1].end, 3),
+                    "text": s.text,
+                    "tokens": toks.iter().map(|tk| tk.id).collect::<Vec<_>>(),
                 })
             })
             .collect();

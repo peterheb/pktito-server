@@ -306,38 +306,68 @@ fn sse(v: Value) -> SseEvent {
     SseEvent::default().data(v.to_string())
 }
 
-/// stream=true: each chunk's text as it is done, in order, as OpenAI's
-/// transcript.text.delta events, then transcript.text.done with the whole
+fn error_event(e: ApiError) -> SseEvent {
+    let mut e = e.body();
+    e["type"] = "error".into();
+    sse(e)
+}
+
+/// The text so far and the sentences just ended: their delta, which goes
+/// onto the text
+fn delta(text: &mut String, ended: &[format::Sentence]) -> SseEvent {
+    let t = format::text_of(ended);
+    let delta = if text.is_empty() { t } else { format!(" {t}") };
+    text.push_str(&delta);
+    sse(json!({ "type": "transcript.text.delta", "delta": delta }))
+}
+
+/// A stream's state: hearing the chunks, with the text so far and the
+/// sentences under way; or, after the last delta, the event that ends it
+enum Streaming {
+    Hearing(UnboundedReceiver<Event>, String, format::Sentences),
+    Ending(SseEvent),
+}
+
+/// stream=true: the sentences each chunk ends, in order, as OpenAI's
+/// transcript.text.delta events, and those the recording's end ends; then
+/// transcript.text.done with the whole
 fn stream(m: Arc<Model>, rx: UnboundedReceiver<Event>) -> Response {
-    let events = futures::stream::unfold(Some((rx, String::new())), move |st| {
+    let start = Streaming::Hearing(rx, String::new(), format::Sentences::new(&m));
+    let events = futures::stream::unfold(Some(start), move |st| {
         let m = m.clone();
         async move {
-            let (mut rx, mut text) = st?;
+            let (mut rx, mut text, mut sentences) = match st? {
+                Streaming::Ending(e) => return Some((Ok::<_, Infallible>(e), None)),
+                Streaming::Hearing(rx, text, sentences) => (rx, text, sentences),
+            };
+            let no_memory = || error_event(ApiError::internal("out of memory"));
             let last = loop {
                 match rx.recv().await {
                     Some(Event::Chunk(c)) => {
-                        let t = m.text(&c.toks);
-                        if t.is_empty() {
+                        let Some(ended) = sentences.add(&m, &format::heard(&m, &c)) else {
+                            break no_memory();
+                        };
+                        if ended.is_empty() {
                             continue;
                         }
-                        let delta = if text.is_empty() { t } else { format!(" {t}") };
-                        text.push_str(&delta);
-                        let e = sse(json!({ "type": "transcript.text.delta", "delta": delta }));
-                        return Some((Ok::<_, Infallible>(e), Some((rx, text))));
+                        let e = delta(&mut text, &ended);
+                        return Some((Ok(e), Some(Streaming::Hearing(rx, text, sentences))));
                     }
                     Some(Event::Planned { .. }) => continue,
                     Some(Event::Done) => {
-                        break sse(json!({ "type": "transcript.text.done", "text": text }))
+                        let Some(ended) = sentences.finish(&m) else {
+                            break no_memory();
+                        };
+                        let e = (!ended.is_empty()).then(|| delta(&mut text, &ended));
+                        let done = sse(json!({ "type": "transcript.text.done", "text": text }));
+                        match e {
+                            Some(e) => return Some((Ok(e), Some(Streaming::Ending(done)))),
+                            None => break done,
+                        }
                     }
-                    Some(Event::Failed(f)) => {
-                        let mut e = ApiError::from(f).body();
-                        e["type"] = "error".into();
-                        break sse(e);
-                    }
+                    Some(Event::Failed(f)) => break error_event(f.into()),
                     Some(Event::Speech { .. }) | None => {
-                        let mut e = ApiError::internal("the request was dropped").body();
-                        e["type"] = "error".into();
-                        break sse(e);
+                        break error_event(ApiError::internal("the request was dropped"))
                     }
                 }
             };
@@ -427,8 +457,11 @@ async fn transcriptions(
     let segments = f.granularities.is_empty() || f.granularities.iter().any(|g| g == "segment");
     let no_memory = || ApiError::internal("out of memory");
     Ok(match format.as_str() {
-        "json" => Json(format::json(&t)).into_response(),
-        "text" => plain("text/plain; charset=utf-8", t.text() + "\n"),
+        "json" => Json(format::json(&t).ok_or_else(no_memory)?).into_response(),
+        "text" => plain(
+            "text/plain; charset=utf-8",
+            t.text().ok_or_else(no_memory)? + "\n",
+        ),
         "srt" => plain(
             "text/plain; charset=utf-8",
             format::subtitles(&t, false).ok_or_else(no_memory)?,

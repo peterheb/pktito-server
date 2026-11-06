@@ -351,14 +351,28 @@ impl Model {
     }
 
     /// The sentences of a recording's tokens, their frames counted from its
-    /// start (pk_sentences); lang a two-letter code, or None. None if memory
-    /// runs out.
-    pub fn sentences(&self, toks: &[PkTok], lang: Option<&str>) -> Option<Vec<PkSentence>> {
+    /// start (pk_sentences); lang a two-letter code, or None. done when the
+    /// tokens run to the recording's end; before it, the words after the
+    /// last sentence are none yet. None if memory runs out.
+    pub fn sentences(
+        &self,
+        toks: &[PkTok],
+        lang: Option<&str>,
+        done: bool,
+    ) -> Option<Vec<PkSentence>> {
         let lang = lang.map(|l| CString::new(l).unwrap_or_default());
         let lp = lang.as_ref().map_or(std::ptr::null(), |l| l.as_ptr());
         let mut out = vec![PkSentence::default(); toks.len()];
-        let n =
-            unsafe { pk_sentences(self.ptr, toks.as_ptr(), toks.len(), lp, 1, out.as_mut_ptr()) };
+        let n = unsafe {
+            pk_sentences(
+                self.ptr,
+                toks.as_ptr(),
+                toks.len(),
+                lp,
+                done as c_int,
+                out.as_mut_ptr(),
+            )
+        };
         if n < 0 {
             return None;
         }
