@@ -33,6 +33,10 @@ by .github/workflows/image.yml, against the libpktito commit it names.
 
 ## Run
 
+A model is one of libpktito's `.pkf` files. https://pktito.net/docs/models
+links v2 and v3 on models.pktito.net, with their SHA-256s, and libpktito's
+README, "Then a model", makes them from NVIDIA's checkpoints.
+
 | option               |                                                                                                        |
 | -------------------- | ------------------------------------------------------------------------------------------------------ |
 | `-m FILE.pkf`        | model to serve (repeatable); the first is the default                                                  |
@@ -432,7 +436,8 @@ monitors alone (DOCKER.md's `-p`).
 
 - `GET /ping` is `/health`'s status alone, with no body, as vLLM's and
   SGLang's `/ping` and `/health` are.
-- `GET /version` is `{"version": "0.1.0", "libpktito": "0.1.0"}`.
+- `GET /version` is the server's version and libpktito's:
+  `{"version": "0.9.6", "libpktito": "0.9.6"}`.
 - `GET /metrics` is Prometheus's text format. The names are the server's and
   the measure's, as vLLM's and SGLang's are, and vLLM's own where the
   measure is the same:

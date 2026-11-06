@@ -1,6 +1,6 @@
 # Running pktito-server in Docker
 
-The image holds only the server. The model stays on the host and is mounted read-only. Run the commands below from the directory that holds libpktito's tree: they leave the server on this machine alone, behind a key.
+The image holds only the server. The model stays on the host and is mounted read-only. Run the commands below in a directory of their own, which will hold the model and the key: they leave the server on this machine alone, behind that key.
 
 1. **Get the image.** GitHub's registry has it for x86-64 and 64-bit Arm, and Docker pulls the one for this machine. libpktito picks its kernels by the CPU when the server starts, so it runs on any machine of its architecture. The `tag` gives it the name the steps below use.
 
@@ -9,13 +9,22 @@ The image holds only the server. The model stays on the host and is mounted read
    docker tag ghcr.io/peterheb/pktito-server:0.9.6 pktito-server
    ```
 
-   Or build it, on the architecture you will run on: put `libpktito` and `pktito-server` side by side, with the server's `Dockerfile` and `Dockerfile.dockerignore` in `pktito-server/`. The libpktito needs to be 0.9.6, as the README's Build says, and the build needs BuildKit, the default from Docker 23.
+   Or build it, on the architecture you will run on: put `libpktito` and `pktito-server` side by side here, with the server's `Dockerfile` and `Dockerfile.dockerignore` in `pktito-server/`. The libpktito needs to be 0.9.6, as the README's Build says, and the build needs BuildKit, the default from Docker 23.
 
    ```sh
    docker build -f pktito-server/Dockerfile -t pktito-server .
    ```
 
-2. **Make a model.** libpktito's README, "Then a model", makes `libpktito/models/parakeet-tdt-0.6b-v2.pkf` once, with Python and numpy, in a clone of https://github.com/peterheb/libpktito. It must be readable by everyone, since the server runs as uid 65532.
+2. **Get a model.** models.pktito.net has the English model, v2, and the multilingual one, v3, and https://pktito.net/docs/models lists both with their SHA-256s. This fetches v2 into `models` and checks it; `shasum -a 256 -c -` does the same check on a Mac. The model must be readable by everyone, since the server runs as uid 65532.
+
+   ```sh
+   mkdir -p models
+   curl -fL -o models/parakeet-tdt-0.6b-v2.pkf https://models.pktito.net/8bfa6750b83c/parakeet-tdt-0.6b-v2.pkf
+   echo "8bfa6750b83cd7c447bad82057c7a12473563b72b3d35487fcca6da0786d83c7  models/parakeet-tdt-0.6b-v2.pkf" | sha256sum -c -
+   chmod -R a+rX models
+   ```
+
+   For v3, fetch https://models.pktito.net/35a59c9a433d/parakeet-tdt-0.6b-v3.pkf, check it against `35a59c9a433d4da2289640db93e73c42478b576e49a293090ef61b4ae595152a`, and serve `/models/parakeet-tdt-0.6b-v3.pkf` below. Or make the models yourself from NVIDIA's checkpoints, with Python and numpy: libpktito's README, "Then a model".
 
 3. **Create an API key.**
 
@@ -29,7 +38,7 @@ The image holds only the server. The model stays on the host and is mounted read
    docker run -d --name pktito-server --restart unless-stopped --init \
      --memory 3g --memory-swap 3g --read-only --cap-drop ALL \
      --security-opt no-new-privileges --env-file pktito.env \
-     -p 127.0.0.1:8000:8000 -v "$PWD/libpktito/models:/models:ro" \
+     -p 127.0.0.1:8000:8000 -v "$PWD/models:/models:ro" \
      pktito-server -m /models/parakeet-tdt-0.6b-v2.pkf -t 8 \
      --max-requests 4 --max-hours 1 --max-upload-mb 128
    ```
@@ -43,12 +52,13 @@ The image holds only the server. The model stays on the host and is mounted read
 5. **Check it.**
 
    ```sh
+   curl -fLO https://raw.githubusercontent.com/peterheb/libpktito/v0.9.6/tests/data/test.wav
    curl -s 127.0.0.1:8000/health
    curl -s -H "Authorization: Bearer $(cut -d= -f2 pktito.env)" \
-     -F file=@libpktito/tests/data/test.wav 127.0.0.1:8000/v1/audio/transcriptions
+     -F file=@test.wav 127.0.0.1:8000/v1/audio/transcriptions
    ```
 
-   `/health` needs no key; transcription does, and is a 401 without it. `/health` should report the workers and their threads (2 workers of 4 threads at `-t 8`).
+   test.wav is libpktito's test recording. `/health` needs no key; transcription does, and is a 401 without it. `/health` should report the workers and their threads (2 workers of 4 threads at `-t 8`).
 
    The image has no shell and no `curl`, so a `HEALTHCHECK` that runs `curl` cannot run inside it, and `docker ps` shows no health. Probe `/ping` or `/health` from outside the container instead: an uptime monitor, a load balancer, or Kubernetes' `httpGet`. They need no key, and neither does `/metrics` for Prometheus (the README's Monitoring).
 
@@ -83,7 +93,7 @@ The image has none. The ffmpeg is yours: you choose the build, and you update it
    docker run -d --name pktito-server --restart unless-stopped --init \
      --memory 3g --memory-swap 3g --read-only --cap-drop ALL \
      --security-opt no-new-privileges --env-file pktito.env \
-     -p 127.0.0.1:8000:8000 -v "$PWD/libpktito/models:/models:ro" \
+     -p 127.0.0.1:8000:8000 -v "$PWD/models:/models:ro" \
      -v "$PWD/ffmpeg:/opt/ffmpeg:ro" \
      pktito-server -m /models/parakeet-tdt-0.6b-v2.pkf -t 8 \
      --max-requests 4 --max-hours 1 --max-upload-mb 128 \
