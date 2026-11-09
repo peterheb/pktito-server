@@ -7,7 +7,7 @@
 //! step-wise transcription (Steps), which the engine moves between threads
 //! only under its lock.
 
-use std::ffi::{c_char, c_int, c_long, CStr, CString};
+use std::ffi::{c_char, c_int, c_long, c_void, CStr, CString};
 use std::path::Path;
 
 #[repr(C)]
@@ -23,6 +23,17 @@ pub struct PkTok {
 pub struct PkSeg {
     pub start: i64,
     pub end: i64,
+}
+
+/// A recording as libpktito reads it, a stretch at a time through `read`
+/// (pk_audio); pk_audio_floats makes one over samples in memory, which must
+/// outlive what reads them. Its fields are C's to fill and read.
+#[repr(C)]
+#[allow(dead_code)]
+struct PkAudio {
+    n: i64,
+    read: Option<unsafe extern "C" fn(*mut c_void, i64, *mut f32, usize) -> c_int>,
+    arg: *mut c_void,
 }
 
 #[repr(C)]
@@ -149,12 +160,8 @@ extern "C" {
     fn pk_asr_set_fast_mode(a: *mut PkAsr, on: c_int);
     fn pk_asr_run(a: *mut PkAsr, x: *const f32, n: usize, toks: *mut *const PkTok) -> c_long;
     fn pk_transcribe_defaults(o: *mut PkTranscribeOpts);
-    fn pk_steps_new(
-        a: *mut PkAsr,
-        x: *const f32,
-        n: usize,
-        o: *const PkTranscribeOpts,
-    ) -> *mut PkSteps;
+    fn pk_audio_floats(x: *const f32, n: usize) -> PkAudio;
+    fn pk_steps_new(a: *mut PkAsr, x: *const PkAudio, o: *const PkTranscribeOpts) -> *mut PkSteps;
     fn pk_steps_chunks(s: *const PkSteps) -> usize;
     fn pk_steps_job(s: *mut PkSteps, j: *mut PkJob) -> c_int;
     fn pk_steps_put(s: *mut PkSteps, j: *const PkJob, toks: *const PkTok, count: c_long) -> c_int;
@@ -170,8 +177,7 @@ extern "C" {
     fn pk_seg_defaults(p: *mut PkSegParams);
     fn pk_asr_speech(
         a: *mut PkAsr,
-        x: *const f32,
-        n: usize,
+        x: *const PkAudio,
         p: *const PkSegParams,
         out: *mut PkSeg,
         cap: usize,
@@ -428,10 +434,10 @@ impl Asr {
         let frames = x.len().div_ceil(512);
         let mut out = vec![PkSeg::default(); 2 * frames + 1];
         let n = unsafe {
+            let rec = pk_audio_floats(x.as_ptr(), x.len());
             pk_asr_speech(
                 self.ptr,
-                x.as_ptr(),
-                x.len(),
+                &rec,
                 std::ptr::null(),
                 out.as_mut_ptr(),
                 out.len(),
@@ -493,9 +499,11 @@ impl Steps {
     /// or max_chunk_s is under a second.
     ///
     /// # Safety
-    /// x must outlive the Steps, which keeps a pointer to it.
+    /// x must outlive the Steps, which reads it until it is dropped (its
+    /// pk_audio, which pk_steps_new copies, points at x).
     pub unsafe fn new(a: &mut Asr, x: &[f32], o: &PkTranscribeOpts) -> Option<Steps> {
-        let ptr = pk_steps_new(a.ptr, x.as_ptr(), x.len(), o);
+        let rec = pk_audio_floats(x.as_ptr(), x.len());
+        let ptr = pk_steps_new(a.ptr, &rec, o);
         if ptr.is_null() {
             None
         } else {

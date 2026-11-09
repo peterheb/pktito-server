@@ -16,8 +16,9 @@ $ curl -s -F file=@talk.wav localhost:8000/v1/audio/transcriptions
 
 ## Build
 
-It needs libpktito 0.9.6, whose core/pktito.h has the step-wise
-transcription, `pk_steps`, and `pk_sentences`:
+It needs libpktito 0.9.7, whose core/pktito.h has the step-wise
+transcription, `pk_steps`, over a recording read as a `pk_audio`, and
+`pk_sentences`:
 
 ```sh
 cd libpktito && make libpktito.a

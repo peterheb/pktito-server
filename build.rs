@@ -2,7 +2,7 @@
 // or ../libpktito beside this one. The archive is linked from a copy in
 // OUT_DIR, as examples/rust does there: given -lpktito, macOS's linker takes
 // libpktito.dylib over libpktito.a beside it, and `make shared` leaves one.
-// It needs libpktito 0.9.6's interface (core/pktito.h).
+// It needs libpktito 0.9.7's interface (core/pktito.h).
 fn main() {
     let dir = std::env::var("PKTITO_DIR")
         .unwrap_or_else(|_| format!("{}/../libpktito", env!("CARGO_MANIFEST_DIR")));
