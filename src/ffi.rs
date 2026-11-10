@@ -224,6 +224,8 @@ fn owned(s: *const c_char) -> String {
 
 /// An error buffer's message, up to its NUL
 pub fn message(err: &[c_char]) -> String {
+    // c_char is i8 on x86-64 and u8 on Arm, where the cast is to its own type
+    #[allow(clippy::unnecessary_cast)]
     let bytes: Vec<u8> = err
         .iter()
         .take_while(|&&c| c != 0)
@@ -344,6 +346,7 @@ impl Model {
         if p.is_null() {
             return String::new();
         }
+        #[allow(clippy::unnecessary_cast)] // as in message()
         let bytes = unsafe { std::slice::from_raw_parts(p as *const u8, len.min(255)) };
         String::from_utf8_lossy(bytes).into_owned()
     }
