@@ -484,7 +484,7 @@ monitors alone (DOCKER.md's `-p`).
 - `GET /ping` is `/health`'s status alone, with no body, as vLLM's and
   SGLang's `/ping` and `/health` are.
 - `GET /version` is the server's version and libpktito's:
-  `{"version": "0.9.6", "libpktito": "0.9.6"}`.
+  `{"version": "0.9.7", "libpktito": "0.9.7"}`.
 - `GET /metrics` is Prometheus's text format. The names are the server's and
   the measure's, as vLLM's and SGLang's are, and vLLM's own where the
   measure is the same:

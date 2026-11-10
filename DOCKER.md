@@ -5,11 +5,11 @@ The image holds only the server. The model stays on the host and is mounted read
 1. **Get the image.** GitHub's registry has it for x86-64 and 64-bit Arm, and Docker pulls the one for this machine. libpktito picks its kernels by the CPU when the server starts, so it runs on any machine of its architecture. The `tag` gives it the name the steps below use.
 
    ```sh
-   docker pull ghcr.io/peterheb/pktito-server:0.9.6
-   docker tag ghcr.io/peterheb/pktito-server:0.9.6 pktito-server
+   docker pull ghcr.io/peterheb/pktito-server:0.9.7
+   docker tag ghcr.io/peterheb/pktito-server:0.9.7 pktito-server
    ```
 
-   Or build it, on the architecture you will run on: put `libpktito` and `pktito-server` side by side here, with the server's `Dockerfile` and `Dockerfile.dockerignore` in `pktito-server/`. The libpktito needs to be 0.9.6, as the README's Build says, and the build needs BuildKit, the default from Docker 23.
+   Or build it, on the architecture you will run on: put `libpktito` and `pktito-server` side by side here, with the server's `Dockerfile` and `Dockerfile.dockerignore` in `pktito-server/`. The libpktito needs to be 0.9.7, as the README's Build says, and the build needs BuildKit, the default from Docker 23.
 
    ```sh
    docker build -f pktito-server/Dockerfile -t pktito-server .
@@ -52,7 +52,7 @@ The image holds only the server. The model stays on the host and is mounted read
 5. **Check it.**
 
    ```sh
-   curl -fLO https://raw.githubusercontent.com/peterheb/libpktito/v0.9.6/tests/data/test.wav
+   curl -fLO https://raw.githubusercontent.com/peterheb/libpktito/v0.9.7/tests/data/test.wav
    curl -s 127.0.0.1:8000/health
    curl -s -H "Authorization: Bearer $(cut -d= -f2 pktito.env)" \
      -F file=@test.wav 127.0.0.1:8000/v1/audio/transcriptions
