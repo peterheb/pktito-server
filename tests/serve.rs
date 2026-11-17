@@ -24,7 +24,7 @@ async fn start(max_requests: usize, headers: Duration, stall: Duration) -> Optio
         max_requests,
         max_seconds: 3600.0,
         ffmpeg: None,
-        idle: IDLE,
+        idle: Some(IDLE),
     };
     let app = api::router(
         Server {

@@ -56,8 +56,8 @@ pub struct Config {
     /// What reads formats other than WAV and AIFF (--ffmpeg), or None
     pub ffmpeg: Option<Arc<Ffmpeg>>,
     /// With no request held this long, the workers let their transcribers
-    /// go (IDLE)
-    pub idle: Duration,
+    /// go (IDLE); None, never (--no-idle-release)
+    pub idle: Option<Duration>,
 }
 
 /// What a request wants of its recording
@@ -605,8 +605,12 @@ fn next(s: &Shared, asr: &mut [Option<Asr>], k: usize) -> Option<Work> {
         if let Some(w) = st.next_work() {
             return Some(w);
         }
+        let Some(idle) = s.config.idle else {
+            st = s.ready.wait(st).unwrap_or_else(PoisonError::into_inner);
+            continue;
+        };
         let holds = asr.iter().any(Option::is_some);
-        st = match st.idle_in(s.config.idle) {
+        st = match st.idle_in(idle) {
             Some(left) if holds && left.is_zero() => {
                 drop(st); // pk_asr_free joins its pool's threads
                 release(asr, s, k);
@@ -617,7 +621,7 @@ fn next(s: &Shared, asr: &mut [Option<Asr>], k: usize) -> Option<Work> {
             // can go with no job's end to wake this worker
             left if holds => {
                 s.ready
-                    .wait_timeout(st, left.unwrap_or(s.config.idle))
+                    .wait_timeout(st, left.unwrap_or(idle))
                     .unwrap_or_else(PoisonError::into_inner)
                     .0
             }

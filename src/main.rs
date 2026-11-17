@@ -25,6 +25,8 @@ usage: pktito-server -m FILE.pkf [options]   serve OpenAI's speech-to-text API
       --max-requests N    requests at once (16); more get 503
       --fast              up to 7% faster; transcripts may differ slightly
       --ffmpeg PATH       ffmpeg 6.0 or later, for formats besides WAV and AIFF
+      --no-idle-release   keep the workers' buffers when idle (by default they
+                          go after 30 s with no request)
   -V, --version           the version
 ";
 
@@ -57,6 +59,10 @@ struct Args {
     fast: bool,
     #[arg(long, value_name = "PATH")]
     ffmpeg: Option<PathBuf>,
+    // Where memory is shared and tight (a DGX Spark beside an LLM): what is
+    // held stays held, not taken again when a request comes
+    #[arg(long)]
+    no_idle_release: bool,
 }
 
 fn main() -> ExitCode {
@@ -135,7 +141,7 @@ fn main() -> ExitCode {
             max_requests: args.max_requests.max(1),
             max_seconds: args.max_hours * 3600.0,
             ffmpeg: ffmpeg.clone(),
-            idle: IDLE,
+            idle: (!args.no_idle_release).then_some(IDLE),
         },
     );
     let (backend, compiler) = ffi::backend();

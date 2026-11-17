@@ -86,7 +86,7 @@ pub fn engine(models: Vec<Arc<Model>>, threads: usize, workers: usize, fast: boo
             max_requests: 16,
             max_seconds: 4.0 * 3600.0,
             ffmpeg: None,
-            idle: IDLE,
+            idle: Some(IDLE),
         },
     )
 }
@@ -150,7 +150,7 @@ pub fn engine_ffmpeg(models: Vec<Arc<Model>>, ff: Arc<Ffmpeg>, max_seconds: f64)
             max_requests: 16,
             max_seconds,
             ffmpeg: Some(ff),
-            idle: IDLE,
+            idle: Some(IDLE),
         },
     )
 }

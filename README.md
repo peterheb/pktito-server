@@ -313,7 +313,11 @@ with no request in hand.
 Once the server has held no request for 30 s (no upload coming, no work
 left), each worker frees its transcribers, joins their threads, and has
 glibc give back what was freed (`malloc_trim`). The next job makes them
-again. There is no flag: making them again costs too little to need one.
+again. Making them again costs the next request little (below), so this is
+the default. `--no-idle-release` keeps them instead: where memory is shared
+and tight, as on a DGX Spark beside an LLM, the server then holds the same
+memory idle as busy, and a request after an idle spell doesn't take tens of
+MB more while a sibling process may have taken what was free.
 
 On a Ryzen 7 7735HS (Zen 3+, 8 cores, laptop power settings), the v2
 model, on 2026-11-17: the server's own memory (RssAnon) after a 60 s
