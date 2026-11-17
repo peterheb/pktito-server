@@ -325,7 +325,9 @@ idle and busy, and no request takes tens of MB more while a sibling process
 may have taken what was free. On a 9950X at `-t 16` (4 workers), v2, on
 2026-11-17: 181 MB (RssAnon) as it starts and 210 MB after four 60 s
 requests at once, the rest a request's own samples and chunks; without the
-warm-up the transcribers made at the start were 16 MB. By default the same
+warm-up the transcribers made at the start were 16 MB. The warm-up is the
+encoder's work on those chunks, four at once here: the server listens 325
+ms after it is launched, against 14 ms by default. By default the same
 server holds 6 MB as it starts, 205 MB after those requests and 24 MB once
 36 s have passed.
 
