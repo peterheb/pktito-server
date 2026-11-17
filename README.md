@@ -290,8 +290,9 @@ What the server holds:
 
 - **The model**, mapped read-only from its file: about 600 MB for v2,
   shared by every worker, and page cache the kernel can drop and read back.
-- **Each worker's transcriber**, about 70 MB: what the encoder works in for
-  a chunk of 30.72 s.
+- **Each worker's transcriber**, about 50 to 70 MB at 4 threads: what the
+  encoder works in for a chunk of 30.72 s. A worker makes it for its first
+  job, and lets it go once the server has held no request for 30 s (below).
 - **Each request**: its upload until it is decoded, then its samples at
   16 kHz, 230 MB an hour of audio. A 16-bit WAV is 115 MB an hour.
 - **Each worker's ffmpeg**, with `--ffmpeg`, while it decodes: 512 MiB at
@@ -306,6 +307,43 @@ once: recordings of 5 to 60 s in every format, decoded then in the server by
 symphonia, uploads that are not audio, clients that hang up), its resident
 memory, the model's included, stayed between 878 and 895 MB, and it ended
 with no request in hand.
+
+### When the server is idle
+
+Once the server has held no request for 30 s (no upload coming, no work
+left), each worker frees its transcribers, joins their threads, and has
+glibc give back what was freed (`malloc_trim`). The next job makes them
+again. There is no flag: making them again costs too little to need one.
+
+On a Ryzen 7 7735HS (Zen 3+, 8 cores, laptop power settings), the v2
+model, on 2026-11-17: the server's own memory (RssAnon) after a 60 s
+recording, with the transcribers held and once they were let go; and what
+making them again added to the next request, a 25 s clip and a 60 s one
+(test.wav), the median of 11 against the same wait with nothing let go:
+
+| `-t`, `-w`    | workers | held   | let go | 25 s clip             | 60 s clip             |
+| ------------- | ------- | ------ | ------ | --------------------- | --------------------- |
+| `-t 4`        | 1 of 4  | 64 MB  | 13 MB  | 0.69 s, +6 ms (0.9%)  | 1.78 s, +7 ms (0.4%)  |
+| `-t 8`        | 2 of 4  | 118 MB | 15 MB  |                       |                       |
+| `-t 16`       | 4 of 4  | 185 MB | 54 MB  | 0.69 s, +5 ms (0.7%)  | 1.05 s, within noise  |
+| `-t 16 -w 8`  | 8 of 2  | 182 MB | 64 MB  |                       |                       |
+| `-t 16 -w 16` | 16 of 1 | 202 MB | 86 MB  | 2.53 s, +26 ms (1.0%) | 3.23 s, +13 ms (0.4%) |
+
+- **Making them again costs 1% of a request at most**, so the spell need
+  not wait for that to pay: 30 s keeps them through a client's requests
+  seconds apart, and lets them go soon after.
+- **The machine waking costs more than the transcribers.** On this laptop
+  a request after 0.6 s of idle took 120 ms longer than one straight after
+  another, and after 3 s 300 ms longer (the server's own times), whether or
+  not anything was let go. Where that comes from wasn't measured further.
+- **The model's pages stay mapped, and are reclaimable.** Idle, its mapping
+  was 610 MB of clean file pages: none dirty, none anonymous, none locked
+  (smaps). The kernel can drop them under pressure, as it drops page cache,
+  and reads them back for the next request, which then waits on the disk
+  for what it reads (most of 600 MB; slowest on an SD card). Their being
+  dropped wasn't forced here: MADV_PAGEOUT from outside needs a capability
+  this machine's user hasn't got.
+- Not yet measured on a 9950X or a Pi 5.
 
 A request holds one of `--max-requests` slots from before its upload is read
 until it is done, so what the requests hold has a bound: about

@@ -1,12 +1,15 @@
 //! The engine with requests at once: each gets pktito-c's answer, its
 //! chunks heard on any worker in any order; a short one is not held up
 //! behind long ones; a request whose caller goes is dropped; what it
-//! cannot hear is said so; a slot is held from before the upload; and a
-//! job that panics fails its request alone.
+//! cannot hear is said so; a slot is held from before the upload; a
+//! job that panics fails its request alone; and an idle server's workers
+//! let their transcribers go, and make them again for the next request.
 
 mod common;
 
-use pktito_server::engine::{deal, Busy, Config, Engine, Event, Failure, Health, Task, Workers};
+use pktito_server::engine::{
+    deal, Busy, Config, Engine, Event, Failure, Health, Task, Workers, IDLE,
+};
 use pktito_server::ffi::{self, Model, PkTranscribeOpts};
 use pktito_server::format::{self, Transcript};
 use std::time::{Duration, Instant};
@@ -141,6 +144,7 @@ fn what_cannot_be_heard_is_said() {
         max_requests,
         max_seconds,
         ffmpeg: None,
+        idle: IDLE,
     };
     let task = || Task::Transcribe(ffi::transcribe_defaults());
     // two minutes' work on two threads: the third request comes while both are heard
@@ -201,6 +205,7 @@ fn a_slot_is_held_from_before_the_upload() {
             max_requests: 2,
             max_seconds: 90.0,
             ffmpeg: None,
+            idle: IDLE,
         },
     );
     let a = engine.slot().unwrap();
@@ -318,4 +323,55 @@ fn threads_are_dealt_evenly() {
     assert_eq!(deal(10, 3), [4, 3, 3]);
     assert_eq!(deal(5, 1), [5]);
     assert_eq!(deal(2, 9), [1, 1]);
+}
+
+/// Within a few seconds, the engine holds n transcribers
+fn holds(engine: &Engine, n: usize) -> bool {
+    let t = Instant::now();
+    while engine.transcribers() != n {
+        if t.elapsed() > Duration::from_secs(5) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
+#[test]
+fn an_idle_servers_transcribers_go_and_come_back() {
+    let Some(m) = common::model("v2") else { return };
+    let idle = Duration::from_millis(300);
+    let engine = Engine::new(
+        vec![m.clone()],
+        Config {
+            threads: 2,
+            workers: 2,
+            fast: false,
+            max_requests: 16,
+            max_seconds: 3600.0,
+            ffmpeg: None,
+            idle,
+        },
+    );
+    let task = || Task::Transcribe(ffi::transcribe_defaults());
+    assert_eq!(engine.transcribers(), 0, "none made before a job needs it");
+    let rx = engine.submit(0, common::data("test.wav"), task()).unwrap();
+    let (first, _) = answer(&m, false, rx);
+    assert!(engine.transcribers() > 0);
+    assert!(holds(&engine, 0), "idle, the workers let theirs go");
+
+    // made again, the same answer
+    let rx = engine.submit(0, common::data("test.wav"), task()).unwrap();
+    let (again, _) = answer(&m, false, rx);
+    assert_eq!(first, again);
+    assert!(engine.transcribers() > 0);
+
+    // a slot whose upload is coming is a request: they stay while it is held
+    let slot = engine.slot().unwrap();
+    let held = engine.transcribers();
+    std::thread::sleep(idle * 3);
+    assert_eq!(engine.transcribers(), held, "kept for the upload coming");
+    drop(slot);
+    assert!(holds(&engine, 0), "let go once the slot is given back");
+    assert_eq!(engine.workers_now().health(), Health::Ok);
 }

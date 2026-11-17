@@ -15,6 +15,11 @@
 //! uploads, then their samples - has a bound; and a job that panics fails
 //! its own request, not its worker.
 //!
+//! A worker makes its transcribers when its first job needs them, and lets
+//! them go once the server has held no request for IDLE: their buffers are
+//! tens of MB a worker, and making them again costs the next request a few
+//! ms (README, "When the server is idle").
+//!
 //! /health and /metrics read it as it goes: what each worker is doing, and
 //! the audio heard and still in hand.
 
@@ -24,10 +29,17 @@ use crate::ffmpeg::Ffmpeg;
 use crate::metrics::Histogram;
 use std::collections::{HashMap, VecDeque};
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+
+/// How long the server holds no request before its workers let their
+/// transcribers go. Making them again cost the next request 5 to 26 ms, 1%
+/// at most of a 25 s clip's time, so the spell need not be long: half a
+/// minute keeps them through a client's requests seconds apart (README,
+/// "When the server is idle")
+pub const IDLE: Duration = Duration::from_secs(30);
 
 pub struct Config {
     /// Threads for transcription in all, the workers' together
@@ -43,6 +55,9 @@ pub struct Config {
     pub max_seconds: f64,
     /// What reads formats other than WAV and AIFF (--ffmpeg), or None
     pub ffmpeg: Option<Arc<Ffmpeg>>,
+    /// With no request held this long, the workers let their transcribers
+    /// go (IDLE)
+    pub idle: Duration,
 }
 
 /// What a request wants of its recording
@@ -135,12 +150,25 @@ struct State {
     heard: Vec<u64>,
     /// Each model's transcriptions' times, upload in hand to done
     took: Vec<Histogram>,
+    /// When the last request went, or the engine began
+    last: Option<Instant>,
 }
 
 impl State {
     fn remove(&mut self, id: u64) -> Option<Request> {
         self.turns.retain(|&k| k != id);
+        self.last = Some(Instant::now());
         self.requests.remove(&id)
+    }
+
+    /// How long until the server has held no request for idle: None while
+    /// it holds one, its upload coming or its work not done
+    fn idle_in(&self, idle: Duration) -> Option<Duration> {
+        if !self.requests.is_empty() || self.coming > 0 {
+            return None;
+        }
+        let since = self.last.map_or(Duration::ZERO, |t| t.elapsed());
+        Some(idle.saturating_sub(since))
     }
 
     fn fail(&mut self, id: u64, f: Failure) {
@@ -254,6 +282,8 @@ struct Worker {
     busy: AtomicBool,
     /// Its last try at a transcriber failed: memory or threads ran out
     broken: AtomicBool,
+    /// Its transcribers made and not let go
+    holds: AtomicUsize,
 }
 
 impl Shared {
@@ -312,7 +342,11 @@ impl Slot {
 impl Drop for Slot {
     fn drop(&mut self) {
         if !self.filled {
-            self.shared.lock().coming -= 1;
+            let mut st = self.shared.lock();
+            st.coming -= 1;
+            st.last = Some(Instant::now());
+            drop(st);
+            self.shared.ready.notify_all(); // the server may be idle now: the workers' clocks start
         }
     }
 }
@@ -387,12 +421,14 @@ impl Engine {
         let state = State {
             heard: vec![0; models.len()],
             took: vec![Histogram::default(); models.len()],
+            last: Some(Instant::now()),
             ..State::default()
         };
         let workers = each.iter().map(|&threads| Worker {
             threads,
             busy: AtomicBool::new(false),
             broken: AtomicBool::new(false),
+            holds: AtomicUsize::new(0),
         });
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
@@ -449,6 +485,15 @@ impl Engine {
             }
         }
         w
+    }
+
+    /// The transcribers the workers hold now, every model's
+    pub fn transcribers(&self) -> usize {
+        self.shared
+            .workers
+            .iter()
+            .map(|w| w.holds.load(Relaxed))
+            .sum()
     }
 
     pub fn stats(&self) -> Stats {
@@ -528,8 +573,57 @@ fn transcriber<'a>(
     if asr[model].is_none() {
         asr[model] = Asr::new(&s.models[model], s.workers[k].threads, s.config.fast);
         s.workers[k].broken.store(asr[model].is_none(), Relaxed);
+        s.workers[k]
+            .holds
+            .fetch_add(asr[model].is_some() as usize, Relaxed);
     }
     asr[model].as_mut()
+}
+
+/// Worker k's transcribers let go, and the memory they freed given back
+fn release(asr: &mut [Option<Asr>], s: &Shared, k: usize) {
+    for a in asr.iter_mut() {
+        *a = None;
+    }
+    s.workers[k].holds.store(0, Relaxed);
+    // glibc keeps what is freed for its next malloc, in each thread's
+    // arena; the buffers were the pool threads' as well as the worker's
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
+/// Worker k's next job, or None when the engine goes; its transcribers let
+/// go, meanwhile, once the server has held no request for config.idle
+fn next(s: &Shared, asr: &mut [Option<Asr>], k: usize) -> Option<Work> {
+    let mut st = s.lock();
+    loop {
+        if st.stop {
+            return None;
+        }
+        if let Some(w) = st.next_work() {
+            return Some(w);
+        }
+        let holds = asr.iter().any(Option::is_some);
+        st = match st.idle_in(s.config.idle) {
+            Some(left) if holds && left.is_zero() => {
+                drop(st); // pk_asr_free joins its pool's threads
+                release(asr, s, k);
+                tracing::debug!("worker {k}: idle, its transcribers let go");
+                s.lock()
+            }
+            // and while the server is busy, a look every idle: a request
+            // can go with no job's end to wake this worker
+            left if holds => {
+                s.ready
+                    .wait_timeout(st, left.unwrap_or(s.config.idle))
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .0
+            }
+            _ => s.ready.wait(st).unwrap_or_else(PoisonError::into_inner),
+        };
+    }
 }
 
 /// Worker k: the next job, done, until the engine goes
@@ -537,17 +631,8 @@ fn work(s: Arc<Shared>, k: usize) {
     let me = &s.workers[k];
     let mut asr: Vec<Option<Asr>> = s.models.iter().map(|_| None).collect();
     loop {
-        let w = {
-            let mut st = s.lock();
-            loop {
-                if st.stop {
-                    return;
-                }
-                if let Some(w) = st.next_work() {
-                    break w;
-                }
-                st = s.ready.wait(st).unwrap_or_else(PoisonError::into_inner);
-            }
+        let Some(w) = next(&s, &mut asr, k) else {
+            return;
         };
         let id = w.id();
         me.busy.store(true, Relaxed);

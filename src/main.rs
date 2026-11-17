@@ -1,6 +1,6 @@
 use clap::Parser;
 use pktito_server::api::{self, Server};
-use pktito_server::engine::{Config, Engine};
+use pktito_server::engine::{Config, Engine, IDLE};
 use pktito_server::ffi::{self, Asr, Model};
 use pktito_server::ffmpeg::Ffmpeg;
 use pktito_server::serve;
@@ -135,6 +135,7 @@ fn main() -> ExitCode {
             max_requests: args.max_requests.max(1),
             max_seconds: args.max_hours * 3600.0,
             ffmpeg: ffmpeg.clone(),
+            idle: IDLE,
         },
     );
     let (backend, compiler) = ffi::backend();

@@ -7,7 +7,7 @@
 mod common;
 
 use pktito_server::api::{self, Server};
-use pktito_server::engine::{Config, Engine};
+use pktito_server::engine::{Config, Engine, IDLE};
 use pktito_server::serve;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
@@ -24,6 +24,7 @@ async fn start(max_requests: usize, headers: Duration, stall: Duration) -> Optio
         max_requests,
         max_seconds: 3600.0,
         ffmpeg: None,
+        idle: IDLE,
     };
     let app = api::router(
         Server {
