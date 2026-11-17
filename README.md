@@ -50,6 +50,7 @@ README, "Then a model", makes them from NVIDIA's checkpoints.
 | `--max-requests N`   | most requests in progress (16); more get 503                                                           |
 | `--fast`             | up to 7% faster; transcripts may differ slightly                                                       |
 | `--ffmpeg PATH`      | ffmpeg 6.0 or later, for formats other than WAV and AIFF (none: those alone); see "Audio"              |
+| `--no-idle-release`  | hold the workers' buffers from the start and when idle; see "When the server is idle"                  |
 
 `RUST_LOG=debug` says more. At `info`, each request logs its audio, its
 time and its speed.
@@ -292,8 +293,9 @@ What the server holds:
 
 - **The model**, mapped read-only from its file: about 600 MB for v2,
   shared by every worker, and page cache the kernel can drop and read back.
-- **Each worker's transcriber**, about 70 MB: what the encoder works in for
-  a chunk of 30.72 s.
+- **Each worker's transcriber**, about 50 to 70 MB at 4 threads: what the
+  encoder works in for a chunk of 30.72 s. A worker makes it for its first
+  job, and lets it go once the server has held no request for 30 s (below).
 - **Each request**: a stretch of its samples at a time, 2 MB for a chunk of
   30.72 s as a worker hears it. Its upload and its samples are scratch files
   on disk (below), not memory.
@@ -321,6 +323,58 @@ server's own memory could only be swapped. The files go in TMPDIR, else
 which it logs at its start; it warns if that is a tmpfs, whose files are
 memory again. They have no names, and go when their request does, or when
 the server stops, however it stops.
+
+### When the server is idle
+
+Once the server has held no request for 30 s (no upload coming, no work
+left), each worker frees its transcribers, joins their threads, and has
+glibc give back what was freed (`malloc_trim`). The next job makes them
+again. Making them again costs the next request little (below), so this is
+the default. `--no-idle-release` keeps them instead, and holds them from
+the start: each worker makes its transcribers as the server starts and
+hears 30.72 s of silence with each, since a buffer is the process's only
+once it is written, and the server does not start if memory or threads run
+out for one. Where memory is shared and tight, as on a DGX Spark beside an
+LLM, the server then holds nearly the same memory before its first request,
+idle and busy, and no request takes tens of MB more while a sibling process
+may have taken what was free. On a 9950X at `-t 16` (4 workers), v2, on
+2026-11-17: 181 MB (RssAnon) as it starts and 210 MB after four 60 s
+requests at once, the rest a request's own samples and chunks; without the
+warm-up the transcribers made at the start were 16 MB. The warm-up is the
+encoder's work on those chunks, four at once here: the server listens 325
+ms after it is launched, against 14 ms by default. By default the same
+server holds 6 MB as it starts, 205 MB after those requests and 24 MB once
+36 s have passed.
+
+On a Ryzen 7 7735HS (Zen 3+, 8 cores, laptop power settings), the v2
+model, on 2026-11-17: the server's own memory (RssAnon) after a 60 s
+recording, with the transcribers held and once they were let go; and what
+making them again added to the next request, a 25 s clip and a 60 s one
+(test.wav), the median of 11 against the same wait with nothing let go:
+
+| `-t`, `-w`    | workers | held   | let go | 25 s clip             | 60 s clip             |
+| ------------- | ------- | ------ | ------ | --------------------- | --------------------- |
+| `-t 4`        | 1 of 4  | 64 MB  | 13 MB  | 0.69 s, +6 ms (0.9%)  | 1.78 s, +7 ms (0.4%)  |
+| `-t 8`        | 2 of 4  | 118 MB | 15 MB  |                       |                       |
+| `-t 16`       | 4 of 4  | 185 MB | 54 MB  | 0.69 s, +5 ms (0.7%)  | 1.05 s, within noise  |
+| `-t 16 -w 8`  | 8 of 2  | 182 MB | 64 MB  |                       |                       |
+| `-t 16 -w 16` | 16 of 1 | 202 MB | 86 MB  | 2.53 s, +26 ms (1.0%) | 3.23 s, +13 ms (0.4%) |
+
+- **Making them again costs 1% of a request at most**, so the spell need
+  not wait for that to pay: 30 s keeps them through a client's requests
+  seconds apart, and lets them go soon after.
+- **The machine waking costs more than the transcribers.** On this laptop
+  a request after 0.6 s of idle took 120 ms longer than one straight after
+  another, and after 3 s 300 ms longer (the server's own times), whether or
+  not anything was let go. Where that comes from wasn't measured further.
+- **The model's pages stay mapped, and are reclaimable.** Idle, its mapping
+  was 610 MB of clean file pages: none dirty, none anonymous, none locked
+  (smaps). The kernel can drop them under pressure, as it drops page cache,
+  and reads them back for the next request, which then waits on the disk
+  for what it reads (most of 600 MB; slowest on an SD card). Their being
+  dropped wasn't forced here: MADV_PAGEOUT from outside needs a capability
+  this machine's user hasn't got.
+- Not yet measured on a Pi 5; on a 9950X, memory alone (above).
 
 A request holds one of `--max-requests` slots from before its upload is read
 until it is done, so what the requests hold has a bound: about
