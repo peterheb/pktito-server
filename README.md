@@ -280,9 +280,11 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
-Those limits bound the server at about 2.1 GB: the model's 600 MB, a
-worker's 70 MB, and 1.4 GB for four requests. If it ever went past 3 GB,
-`MemoryMax=` would stop the server, not the LLM.
+Those limits bound the server's memory at well under 1 GB: the model's 600
+MB, a worker's 70 MB, and a few MB a request; the requests' 1.4 GB of
+uploads and samples are scratch files in the unit's own /var/tmp, on disk
+(Memory, below). If it ever went past 3 GB, `MemoryMax=` would stop the
+server, not the LLM.
 
 ## Memory
 
@@ -292,8 +294,9 @@ What the server holds:
   shared by every worker, and page cache the kernel can drop and read back.
 - **Each worker's transcriber**, about 70 MB: what the encoder works in for
   a chunk of 30.72 s.
-- **Each request**: its upload until it is decoded, then its samples at
-  16 kHz, 230 MB an hour of audio. A 16-bit WAV is 115 MB an hour.
+- **Each request**: a stretch of its samples at a time, 2 MB for a chunk of
+  30.72 s as a worker hears it. Its upload and its samples are scratch files
+  on disk (below), not memory.
 - **Each worker's ffmpeg**, with `--ffmpeg`, while it decodes: 512 MiB at
   most (its limit; macOS refuses the limit, so there it has none), 60 MB for
   an hour of AAC.
@@ -307,17 +310,36 @@ symphonia, uploads that are not audio, clients that hang up), its resident
 memory, the model's included, stayed between 878 and 895 MB, and it ended
 with no request in hand.
 
+An upload is written to a scratch file as it comes in, and read from there:
+a WAV or AIFF a stretch at a time where it is, as pktito-c reads a file
+(pk_wav_seekable), and anything else by ffmpeg, whose samples, resampled to
+16 kHz, go to a second scratch file, 230 MB an hour, that the stretches are
+read back from. A file's pages are page cache, which the kernel writes back
+to disk and lets go of as memory runs short, where the same bytes in the
+server's own memory could only be swapped. The files go in TMPDIR, else
+/var/tmp, else /tmp, as pktito-c's do, the first the server can write to,
+which it logs at its start; it warns if that is a tmpfs, whose files are
+memory again. They have no names, and go when their request does, or when
+the server stops, however it stops.
+
 A request holds one of `--max-requests` slots from before its upload is read
 until it is done, so what the requests hold has a bound: about
-`--max-requests` × (`--max-upload-mb` + 230 MB × `--max-hours`), beyond the
-model and the workers. At the defaults that is 16 × (256 MB + 922 MB), about
-19 GB, so lower the limits to what the machine can spare.
+`--max-requests` × (`--max-upload-mb` + 230 MB × `--max-hours`) of disk. At
+the defaults that is 16 × (256 MB + 922 MB), about 19 GB.
+
+An hour of 44.1 kHz stereo MP3, of 48 kHz stereo AAC in an MP4 indexed at
+its end, and of 44.1 kHz stereo WAV (635 MB), each alone through a server of
+2 workers of 4 threads on the v2 model, peaked at 726 MB resident, the
+model's pages included, where holding the upload and the samples in memory
+peaked at 941 to 943 MB; the transcripts were the same byte for byte
+(Ryzen 7 7735HS, ffmpeg 9.0.2, 2026-11-17).
 
 On a DGX Spark, the GPU's memory is the system's, and what the server may use
 is what the LLM leaves. Running out there stops processes without warning,
-or sets the machine swapping. Size the limits to MemAvailable with the LLM
-loaded: `--max-requests 4 --max-hours 1 --max-upload-mb 128` comes to about
-1.4 GB.
+or sets the machine swapping. The page cache the scratch files pass through
+is what the kernel lets go of first, so the request limits size the disk
+the server needs, `--max-requests 4 --max-hours 1 --max-upload-mb 128`
+about 1.4 GB of it, more than its memory.
 
 ## The API
 
@@ -345,8 +367,8 @@ updates the one it is given: its build, codecs and fixes are the admin's.
 Each upload gets an ffmpeg of its own (src/ffmpeg.rs), with only what
 decoding needs, so that what a damaged file does to it stays there:
 
-- the upload as its standard input, a file in memory that it can seek in,
-  as an MP4 indexed at its end needs, read through ffmpeg's `fd:` protocol
+- the upload as its standard input, its scratch file, which it can seek
+  in, as an MP4 indexed at its end needs, read through ffmpeg's `fd:` protocol
   alone, so that it opens no path and no address;
 - no environment, so not the API key, nor the server's through /proc, which
   are root's while the server, not dumpable with `--ffmpeg`, runs; and no
@@ -359,13 +381,12 @@ decoding needs, so that what a damaged file does to it stays there:
 - and it is stopped when the audio passes `--max-hours`, when it writes
   nothing for 30 s, or when it has run for twice its CPU seconds.
 
-It writes the first audio stream as float WAV, which libpktito's reader
-takes as it takes an uploaded WAV: a FLAC of test.wav gives test.wav's
+It writes the first audio stream as float WAV to a pipe, which libpktito's
+reader takes front to back, resampled to 16 kHz into a scratch file: a FLAC of test.wav gives test.wav's
 `pktito_json` byte for byte (tests/api.rs). Its arguments are options ffmpeg
 has long had, so that it can be updated apart from the server: `-nostdin
 -hide_banner -loglevel error -threads 1 -protocol_whitelist fd -i fd: -map
-0:a:0 -c:a pcm_f32le -f wav pipe:1`. On macOS, which has no memfd, the
-upload goes to it through a temporary file, unlinked once open. macOS
+0:a:0 -c:a pcm_f32le -f wav pipe:1`. macOS
 refuses the memory limit, so there ffmpeg's memory has no bound. It applied
 the CPU limit late to a stand-in that forked as it wrote (22.7 s of CPU at
 10 s, where one that did not fork stopped at 2.0 s of 2), and the overall

@@ -26,14 +26,51 @@ pub struct PkSeg {
 }
 
 /// A recording as libpktito reads it, a stretch at a time through `read`
-/// (pk_audio); pk_audio_floats makes one over samples in memory, which must
-/// outlive what reads them. Its fields are C's to fill and read.
+/// (pk_audio), here a Source's
 #[repr(C)]
-#[allow(dead_code)]
 struct PkAudio {
     n: i64,
     read: Option<unsafe extern "C" fn(*mut c_void, i64, *mut f32, usize) -> c_int>,
     arg: *mut c_void,
+}
+
+/// A recording at the model's rate, read a stretch at a time: what the
+/// library is given of it (pk_audio). A call reads one stretch at a time
+/// but not always on the thread that called it, and the engine's workers
+/// read their chunks at once, so a Source is Sync.
+pub trait Source: Sync {
+    /// Its samples
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// Samples [at, at + out.len()) into out; false if they cannot be read
+    fn read(&self, at: usize, out: &mut [f32]) -> bool;
+}
+
+/// The library's read of a Source
+unsafe extern "C" fn source_read<S: Source>(
+    arg: *mut c_void,
+    at: i64,
+    out: *mut f32,
+    n: usize,
+) -> c_int {
+    let s = &*(arg as *const S);
+    let out = std::slice::from_raw_parts_mut(out, n);
+    // a panic does not cross into C
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.read(at as usize, out))) {
+        Ok(true) => 0,
+        _ => -1,
+    }
+}
+
+/// x as a pk_audio, which points at x
+fn audio_of<S: Source>(x: &S) -> PkAudio {
+    PkAudio {
+        n: x.len() as i64,
+        read: Some(source_read::<S>),
+        arg: x as *const S as *mut c_void,
+    }
 }
 
 #[repr(C)]
@@ -160,7 +197,6 @@ extern "C" {
     fn pk_asr_set_fast_mode(a: *mut PkAsr, on: c_int);
     fn pk_asr_run(a: *mut PkAsr, x: *const f32, n: usize, toks: *mut *const PkTok) -> c_long;
     fn pk_transcribe_defaults(o: *mut PkTranscribeOpts);
-    fn pk_audio_floats(x: *const f32, n: usize) -> PkAudio;
     fn pk_steps_new(a: *mut PkAsr, x: *const PkAudio, o: *const PkTranscribeOpts) -> *mut PkSteps;
     fn pk_steps_chunks(s: *const PkSteps) -> usize;
     fn pk_steps_job(s: *mut PkSteps, j: *mut PkJob) -> c_int;
@@ -206,6 +242,8 @@ extern "C" {
         errlen: usize,
     ) -> *mut PkWav;
     pub fn pk_wav_read(w: *mut PkWav, out: *mut f32, n: usize) -> usize;
+    pub fn pk_wav_seekable(w: *mut PkWav, frames: *mut u64) -> c_int;
+    pub fn pk_wav_seek(w: *mut PkWav, frame: u64) -> c_int;
     pub fn pk_wav_status(w: *const PkWav, err: *mut c_char, errlen: usize) -> c_int;
     pub fn pk_wav_close(w: *mut PkWav);
     fn pk_resampler_new(from: u32, to: u32) -> *mut PkResampler;
@@ -213,6 +251,8 @@ extern "C" {
     fn pk_resample_room(r: *const PkResampler, n: usize) -> usize;
     fn pk_resample(r: *mut PkResampler, input: *const f32, n: usize, out: *mut f32) -> usize;
     fn pk_resample_flush(r: *mut PkResampler, out: *mut f32) -> usize;
+    fn pk_resample_total(r: *const PkResampler, n: u64) -> u64;
+    fn pk_resampler_seek(r: *mut PkResampler, at: u64, skip: *mut usize) -> u64;
 }
 
 fn owned(s: *const c_char) -> String {
@@ -432,12 +472,13 @@ impl Asr {
         Some(unsafe { std::slice::from_raw_parts(t, n as usize) }.to_vec())
     }
 
-    /// The speech in x (pk_asr_speech), Silero's defaults. None if memory runs out.
-    pub fn speech(&mut self, x: &[f32]) -> Option<Vec<PkSeg>> {
+    /// The speech in x (pk_asr_speech), Silero's defaults. None if memory
+    /// runs out or x cannot be read.
+    pub fn speech<S: Source>(&mut self, x: &S) -> Option<Vec<PkSeg>> {
         let frames = x.len().div_ceil(512);
         let mut out = vec![PkSeg::default(); 2 * frames + 1];
         let n = unsafe {
-            let rec = pk_audio_floats(x.as_ptr(), x.len());
+            let rec = audio_of(x);
             pk_asr_speech(
                 self.ptr,
                 &rec,
@@ -498,14 +539,14 @@ pub struct Steps {
 unsafe impl Send for Steps {}
 
 impl Steps {
-    /// The VAD and the chunks of x, on a's threads. None if memory runs out
-    /// or max_chunk_s is under a second.
+    /// The VAD and the chunks of x, on a's threads. None if memory runs
+    /// out, x cannot be read, or max_chunk_s is under a second.
     ///
     /// # Safety
     /// x must outlive the Steps, which reads it until it is dropped (its
     /// pk_audio, which pk_steps_new copies, points at x).
-    pub unsafe fn new(a: &mut Asr, x: &[f32], o: &PkTranscribeOpts) -> Option<Steps> {
-        let rec = pk_audio_floats(x.as_ptr(), x.len());
+    pub unsafe fn new<S: Source>(a: &mut Asr, x: &S, o: &PkTranscribeOpts) -> Option<Steps> {
+        let rec = audio_of(x);
         let ptr = pk_steps_new(a.ptr, &rec, o);
         if ptr.is_null() {
             None
@@ -659,6 +700,20 @@ impl Resampler {
             }
         };
         unsafe { out.set_len(at + got) };
+    }
+
+    /// The outputs of n inputs (pk_resample_total)
+    pub fn total(&self, n: u64) -> u64 {
+        unsafe { pk_resample_total(self.ptr, n) }
+    }
+
+    /// Ready to give its outputs from output `at` on (pk_resampler_seek):
+    /// the input to push from, and how many of the outputs that come lie
+    /// before `at`
+    pub fn seek(&mut self, at: u64) -> (u64, usize) {
+        let mut skip = 0;
+        let from = unsafe { pk_resampler_seek(self.ptr, at, &mut skip) };
+        (from, skip)
     }
 }
 

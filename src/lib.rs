@@ -12,4 +12,5 @@ pub mod ffi;
 pub mod ffmpeg;
 pub mod format;
 pub mod metrics;
+pub mod scratch;
 pub mod serve;

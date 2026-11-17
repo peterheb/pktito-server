@@ -78,6 +78,23 @@ fn main() -> ExitCode {
             }
         }
     }
+    // Uploads and their samples go to scratch files (src/scratch.rs): a
+    // folder that cannot take one would fail every request
+    match pktito_server::scratch::folder() {
+        Ok((dir, tmpfs)) => {
+            tracing::info!("scratch files in {}", dir.display());
+            if tmpfs {
+                tracing::warn!(
+                    "{} is a tmpfs: uploads and their samples there are held in memory (TMPDIR names a folder on disk)",
+                    dir.display()
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("pktito-server: no folder for scratch files (TMPDIR, /var/tmp, /tmp): {e}");
+            return ExitCode::FAILURE;
+        }
+    }
     // The ffmpeg's check: it runs under a decode's limits, and reads fd:
     let ffmpeg = match &args.ffmpeg {
         Some(p) => {

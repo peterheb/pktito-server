@@ -5,10 +5,11 @@
 //! damaged files and took 4 to 16 GB on others of 53 KB (fuzzed 2026-11-04).
 //!
 //! What it has:
-//! - the upload as its standard input: a file in memory, which it can seek
-//!   in, as an MP4 indexed at its end needs (through a pipe ffmpeg gives
-//!   "partial file"), read through its fd: protocol alone, so that it opens
-//!   no path and no address (-protocol_whitelist fd; ffmpeg 6.0 on);
+//! - the upload as its standard input: its scratch file (src/scratch.rs),
+//!   which it can seek in, as an MP4 indexed at its end needs (through a
+//!   pipe ffmpeg gives "partial file"), read through its fd: protocol
+//!   alone, so that it opens no path and no address (-protocol_whitelist
+//!   fd; ffmpeg 6.0 on);
 //! - no environment, so not the API key, nor the server's through /proc,
 //!   since main.rs makes the server not dumpable; no descriptors but its
 //!   three, whose files are mode 0 (no_access);
@@ -22,17 +23,19 @@
 //! server's user can run but not read (DOCKER.md's chmod 711), which Linux
 //! runs not dumpable.
 //!
-//! It writes the first audio stream as float WAV at its own rate, which
-//! libpktito's reader takes as it takes an uploaded WAV: the channels'
-//! mean, resampled to 16 kHz. It is stopped when the audio passes
+//! It writes the first audio stream as float WAV at its own rate to a pipe,
+//! which libpktito's reader takes front to back: the channels' mean,
+//! resampled to 16 kHz as a whole uploaded WAV is, into a scratch file of
+//! its own that the model's stretches are read from. It is stopped when the audio passes
 //! --max-hours, and by a watchdog when it writes nothing for STALL. Its
 //! arguments are options ffmpeg has kept for years, so that the ffmpeg
 //! can be updated apart from the server.
 
-use crate::audio::{self, Audio, AudioError};
+use crate::audio::{self, AudioError, Recording};
+use crate::scratch::no_access;
 use std::fs::File;
-use std::io::{self, PipeReader, PipeWriter, Read, Seek, SeekFrom, Write};
-use std::os::fd::{AsRawFd, IntoRawFd};
+use std::io::{self, PipeReader, PipeWriter, Read};
+use std::os::fd::IntoRawFd;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -134,17 +137,15 @@ impl Ffmpeg {
         c
     }
 
-    /// An upload to `rate` Hz mono, of max_samples at most
+    /// An upload, a file read from its start, to `rate` Hz mono, of
+    /// max_samples at most
     pub fn decode(
         &self,
-        upload: Vec<u8>,
+        input: File,
         rate: u32,
         max_samples: usize,
-    ) -> Result<Audio, AudioError> {
+    ) -> Result<Recording, AudioError> {
         let fail = |why: String| AudioError::Unreadable(why);
-        let input =
-            memfile(&upload).map_err(|e| fail(format!("cannot hand the upload to ffmpeg: {e}")))?;
-        drop(upload);
         let ((out, out_w), (mut stderr, err_w)) = match (pipe(), pipe()) {
             (Ok(o), Ok(e)) => (o, e),
             (Err(e), _) | (_, Err(e)) => {
@@ -190,14 +191,14 @@ impl Ffmpeg {
             return Err(fail("no thread to watch ffmpeg with".into()));
         };
 
-        // libpktito's reader on its output, as on an uploaded WAV
+        // libpktito's reader on its output, into a scratch file
         let out = out.into_raw_fd();
         let f = unsafe { libc::fdopen(out, c"r".as_ptr()) };
         let read = if f.is_null() {
             unsafe { libc::close(out) };
             Err(fail("cannot read ffmpeg's output".into()))
         } else {
-            let r = audio::read(f, c"ffmpeg's output", rate, max_samples, &mut || {
+            let r = audio::spool(f, c"ffmpeg's output", rate, max_samples, &mut || {
                 if let Ok(mut s) = w.state.lock() {
                     s.1 = Instant::now();
                 }
@@ -340,75 +341,11 @@ fn limits(cpu: u64) -> io::Result<()> {
     set(libc::RLIMIT_NOFILE, 16)
 }
 
-/// The upload as a file in memory, which ffmpeg can seek in
-#[cfg(target_os = "linux")]
-fn memfile(bytes: &[u8]) -> io::Result<File> {
-    let fd = unsafe { libc::memfd_create(c"pktito-upload".as_ptr(), libc::MFD_CLOEXEC) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // Safety: a descriptor just made, which the File alone owns
-    let mut f = unsafe { std::os::fd::FromRawFd::from_raw_fd(fd) };
-    no_access(&f)?;
-    write_whole(&mut f, bytes)?;
-    Ok(f)
-}
-
-/// The upload as a file ffmpeg can seek in: without memfd, one in the
-/// temporary directory, unlinked once open
-#[cfg(not(target_os = "linux"))]
-fn memfile(bytes: &[u8]) -> io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static N: AtomicU64 = AtomicU64::new(0);
-    let p = std::env::temp_dir().join(format!(
-        "pktito-upload-{}-{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    ));
-    let mut f = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&p)?;
-    std::fs::remove_file(&p)?;
-    write_whole(&mut f, bytes)?;
-    Ok(f)
-}
-
-fn write_whole(f: &mut File, bytes: &[u8]) -> io::Result<()> {
-    f.write_all(bytes)?;
-    f.seek(SeekFrom::Start(0))?;
-    Ok(())
-}
-
 /// A pipe for ffmpeg to write to, mode 0 before it runs (no_access)
 fn pipe() -> io::Result<(PipeReader, PipeWriter)> {
     let (r, w) = io::pipe()?;
     no_access(&r)?;
     Ok((r, w))
-}
-
-/// Mode 0 on fd's file, its pipe's both ends. Every ffmpeg runs as the
-/// server's user, who could otherwise open another decode's upload or pipes
-/// through /proc/<pid>/fd: a stand-in for an ffmpeg that a crafted upload
-/// took over read the upload another was decoding so (Docker, 2026-11-04).
-/// What is open stays open: ffmpeg reads and writes through the descriptors
-/// it is given.
-#[cfg(target_os = "linux")]
-fn no_access(fd: &impl AsRawFd) -> io::Result<()> {
-    if unsafe { libc::fchmod(fd.as_raw_fd(), 0) } == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
-}
-
-/// macOS has no /proc to open them through
-#[cfg(not(target_os = "linux"))]
-fn no_access(_fd: &impl AsRawFd) -> io::Result<()> {
-    Ok(())
 }
 
 fn status(s: ExitStatus) -> String {

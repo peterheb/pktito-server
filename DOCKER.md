@@ -39,13 +39,16 @@ The image holds only the server. The model stays on the host and is mounted read
      --memory 3g --memory-swap 3g --read-only --cap-drop ALL \
      --security-opt no-new-privileges --env-file pktito.env \
      -p 127.0.0.1:8000:8000 -v "$PWD/models:/models:ro" \
+     -v pktito-scratch:/tmp \
      pktito-server -m /models/parakeet-tdt-0.6b-v2.pkf -t 8 \
      --max-requests 4 --max-hours 1 --max-upload-mb 128
    ```
 
-   The memory limit includes the model's page cache. It makes the kernel stop this container, not its neighbours, if a large upload pushes it too far. The request limits keep the requests under it. They hold about `--max-requests` × (`--max-upload-mb` + 230 MB × `--max-hours`), 1.4 GB here (the README's Memory). At the defaults that is 19 GB, so raise the limits and `--memory` together.
+   The memory limit includes the model's page cache. It makes the kernel stop this container, not its neighbours, if something pushes it too far.
 
-   `--init` lets `docker stop` stop the server at once. The server has no handler for SIGTERM, and as the container's first process it ignores the signal until Docker kills it. On Docker Desktop that took 3.5 s and ended in SIGKILL (exit 137); with `--init` it took 0.5 s. The server writes no files and needs no privileges, so the container gets neither.
+   Uploads, and the samples decoded from them, go to scratch files on disk, not into the server's memory (the README's Memory). The image is read-only, so `/tmp` is a volume, `pktito-scratch`: a folder on the host's disk, which Docker makes the first time, writable by the server as the image's `/tmp` is. Not a `--tmpfs`, whose files are memory and count against `--memory`; the server warns at its start if its folder is one. The requests hold about `--max-requests` × (`--max-upload-mb` + 230 MB × `--max-hours`) of it, 1.4 GB here, 19 GB at the defaults. The files have no names, and go when their request does, or the server stops.
+
+   `--init` lets `docker stop` stop the server at once. The server has no handler for SIGTERM, and as the container's first process it ignores the signal until Docker kills it. On Docker Desktop that took 3.5 s and ended in SIGKILL (exit 137); with `--init` it took 0.5 s. The server needs no privileges, so the container gets none, and writes only its scratch files, so the container's own files stay read-only.
 
    The image listens on port 8000 on all of the container's addresses, and `-p` decides who can reach it: here, this machine alone. Passing `-l` stops the server, because the image already sets it. To listen elsewhere inside the container, put `--entrypoint pktito-server` before the image and pass `-l` with the other arguments.
 
@@ -70,7 +73,7 @@ The server above answers this machine alone. To serve others, replace `127.0.0.1
 
 The server reads WAV and AIFF itself. Anything else (FLAC, MP3, M4A, Ogg, a browser's WebM, a video's sound) it reads only through an ffmpeg you give it, 6.0 or later. Without one, such an upload is a 400 that names `--ffmpeg`.
 
-The image has none. The ffmpeg is yours: you choose the build, and you update it for speed, codecs or security fixes. Nothing updates it for you. The server uses only options ffmpeg has long had, so a newer ffmpeg can replace an older one. Each upload gets its own ffmpeg process, held to what decoding needs (the README's Audio): the upload in memory and no path or address to open, no environment and so no key, 512 MiB of memory, CPU seconds by `--max-hours`, no file written, and 30 s to write something before it is stopped. An ffmpeg that a crafted file took over would still have the container's network. Keep the key, so that only your clients can send uploads.
+The image has none. The ffmpeg is yours: you choose the build, and you update it for speed, codecs or security fixes. Nothing updates it for you. The server uses only options ffmpeg has long had, so a newer ffmpeg can replace an older one. Each upload gets its own ffmpeg process, held to what decoding needs (the README's Audio): the upload as an open file, with no path or address to open, no environment and so no key, 512 MiB of memory, CPU seconds by `--max-hours`, no file written, and 30 s to write something before it is stopped. An ffmpeg that a crafted file took over would still have the container's network. Keep the key, so that only your clients can send uploads.
 
 1. **Get a self-contained build.** It must need no library but the C library: the image has that, and none of the others a distribution's ffmpeg needs. BtbN's FFmpeg-Builds (https://github.com/BtbN/FFmpeg-Builds/releases) link everything else in, and are rebuilt daily, from each release branch as well as from master. This fetches the 9.0 branch's `lgpl` build, checks it against BtbN's checksums, and puts its `ffmpeg` in a directory `ffmpeg` here, where the server may run it but not read it (below). On Arm, `linuxarm64` replaces `linux64`: on a GB10, that build (n9.0.2) ran under the flags below, and its FLAC and Ogg gave the WAV's transcripts (2026-11-04).
 
@@ -94,6 +97,7 @@ The image has none. The ffmpeg is yours: you choose the build, and you update it
      --memory 3g --memory-swap 3g --read-only --cap-drop ALL \
      --security-opt no-new-privileges --env-file pktito.env \
      -p 127.0.0.1:8000:8000 -v "$PWD/models:/models:ro" \
+     -v pktito-scratch:/tmp \
      -v "$PWD/ffmpeg:/opt/ffmpeg:ro" \
      pktito-server -m /models/parakeet-tdt-0.6b-v2.pkf -t 8 \
      --max-requests 4 --max-hours 1 --max-upload-mb 128 \

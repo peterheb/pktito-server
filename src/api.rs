@@ -13,7 +13,7 @@ use crate::ffi::{self, Model};
 use crate::format::{self, Heard, Transcript};
 use crate::metrics::{self, Http};
 use crate::serve::Stalled;
-use axum::extract::multipart::MultipartError;
+use axum::extract::multipart::{Field, MultipartError};
 use axum::extract::{DefaultBodyLimit, MatchedPath, Multipart, Path, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
@@ -26,6 +26,7 @@ use std::convert::Infallible;
 use std::ffi::c_int;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 pub struct Server {
@@ -207,7 +208,8 @@ fn authorize(app: &Server, headers: &HeaderMap) -> Result<(), ApiError> {
 /// a transducer has nothing they set.
 #[derive(Default)]
 struct Form {
-    file: Option<Vec<u8>>,
+    /// The upload, in a scratch file (src/scratch.rs)
+    file: Option<std::fs::File>,
     model: String,
     language: Option<String>,
     response_format: Option<String>,
@@ -243,7 +245,7 @@ async fn form(mut mp: Multipart) -> Result<Form, ApiError> {
     while let Some(field) = mp.next_field().await? {
         let name = field.name().unwrap_or_default().to_string();
         match name.as_str() {
-            "file" => f.file = Some(field.bytes().await?.into()),
+            "file" => f.file = Some(upload(field).await?),
             "model" => f.model = field.text().await?.trim().to_string(),
             "language" => f.language = language(&field.text().await?),
             "response_format" => f.response_format = Some(field.text().await?.trim().to_string()),
@@ -257,6 +259,19 @@ async fn form(mut mp: Multipart) -> Result<Form, ApiError> {
         }
     }
     Ok(f)
+}
+
+/// A file field, written to a scratch file as it comes: an upload is not
+/// held in memory
+async fn upload(mut field: Field<'_>) -> Result<std::fs::File, ApiError> {
+    let failed =
+        |e: std::io::Error| ApiError::internal(format!("cannot write the upload to disk: {e}"));
+    let mut f = tokio::fs::File::from_std(crate::scratch::file().map_err(failed)?);
+    while let Some(bytes) = field.chunk().await? {
+        f.write_all(&bytes).await.map_err(failed)?;
+    }
+    f.flush().await.map_err(failed)?;
+    Ok(f.into_std().await)
 }
 
 /// The model a request names; for a name the server does not have (an

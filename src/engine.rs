@@ -12,17 +12,19 @@
 //!
 //! A request holds one of max_requests slots from before its upload is
 //! read until it is done (Slot), so that what the requests hold - their
-//! uploads, then their samples - has a bound; and a job that panics fails
-//! its own request, not its worker.
+//! uploads, then their samples, both in scratch files on disk
+//! (src/scratch.rs) - has a bound; and a job that panics fails its own
+//! request, not its worker.
 //!
 //! /health and /metrics read it as it goes: what each worker is doing, and
 //! the audio heard and still in hand.
 
-use crate::audio::{self, AudioError};
-use crate::ffi::{Asr, Chunk, Model, PkJob, PkSeg, PkTok, PkTranscribeOpts, Steps};
+use crate::audio::{self, AudioError, Recording};
+use crate::ffi::{Asr, Chunk, Model, PkJob, PkSeg, PkTok, PkTranscribeOpts, Source, Steps};
 use crate::ffmpeg::Ffmpeg;
 use crate::metrics::Histogram;
 use std::collections::{HashMap, VecDeque};
+use std::fs::File;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -77,19 +79,40 @@ pub enum Event {
     Failed(Failure),
 }
 
+/// What a run that libpktito stopped says: memory ran out, or a stretch of
+/// the recording could not be read back from its scratch file
+const LOST: &str = "out of memory, or the recording unreadable from disk";
+
 /// Every request slot is taken
 #[derive(Debug)]
 pub struct Busy;
 
+/// A request's recording as it came: a scratch file the API wrote it to,
+/// or bytes in hand, which go to one before they are decoded
+pub enum Upload {
+    File(File),
+    Bytes(Vec<u8>),
+}
+
+impl From<File> for Upload {
+    fn from(f: File) -> Upload {
+        Upload::File(f)
+    }
+}
+
+impl From<Vec<u8>> for Upload {
+    fn from(b: Vec<u8>) -> Upload {
+        Upload::Bytes(b)
+    }
+}
+
 struct Request {
     model: usize,
     task: Option<Task>,
-    upload: Option<Vec<u8>>,
-    /// Before samples, so that it goes first: it points into them
+    upload: Option<Upload>,
+    /// Before samples, so that it goes first: it points at them
     steps: Option<Steps>,
-    /// A Vec's own buffer: Arc<[f32]> from a Vec copies it, and for that
-    /// moment holds the samples twice
-    samples: Option<Arc<Vec<f32>>>,
+    samples: Option<Arc<Recording>>,
     taken: usize,
     /// Its audio counted as heard, to this sample: its last chunk's end
     heard_to: usize,
@@ -102,13 +125,13 @@ enum Work {
     Plan {
         id: u64,
         model: usize,
-        upload: Vec<u8>,
+        upload: Upload,
         task: Task,
     },
     Hear {
         id: u64,
         model: usize,
-        samples: Arc<Vec<f32>>,
+        samples: Arc<Recording>,
         job: PkJob,
     },
 }
@@ -186,7 +209,7 @@ impl State {
                     return Some(w);
                 }
                 Ok(None) => k += 1,
-                Err(_) => self.fail(id, Failure::Internal("out of memory".into())),
+                Err(_) => self.fail(id, Failure::Internal(LOST.into())),
             }
         }
         None
@@ -218,7 +241,7 @@ impl State {
             }
         }
         if failed {
-            self.fail(id, Failure::Internal("out of memory".into()));
+            self.fail(id, Failure::Internal(LOST.into()));
         } else if gone {
             self.remove(id);
         } else if r.taken == steps.chunks() {
@@ -279,7 +302,7 @@ impl Slot {
     pub fn submit(
         mut self,
         model: usize,
-        upload: Vec<u8>,
+        upload: impl Into<Upload>,
         task: Task,
     ) -> mpsc::UnboundedReceiver<Event> {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -292,7 +315,7 @@ impl Slot {
             Request {
                 model,
                 task: Some(task),
-                upload: Some(upload),
+                upload: Some(upload.into()),
                 steps: None,
                 samples: None,
                 taken: 0,
@@ -498,7 +521,7 @@ impl Engine {
     pub fn submit(
         &self,
         model: usize,
-        upload: Vec<u8>,
+        upload: impl Into<Upload>,
         task: Task,
     ) -> Result<mpsc::UnboundedReceiver<Event>, Busy> {
         Ok(self.slot()?.submit(model, upload, task))
@@ -567,9 +590,19 @@ fn work(s: Arc<Shared>, k: usize) {
                 samples,
                 job,
             } => {
-                let x = &samples[job.at.start as usize..job.at.end as usize];
-                let toks = transcriber(&mut asr, &s, k, model).and_then(|a| a.run(x));
-                s.lock().heard(id, &job, toks);
+                // the stretch from disk, then heard; a stretch that cannot
+                // be read fails its request
+                let (at, end) = (job.at.start as usize, job.at.end as usize);
+                match samples.stretch(at, end.saturating_sub(at)) {
+                    Some(x) => {
+                        let toks = transcriber(&mut asr, &s, k, model).and_then(|a| a.run(&x));
+                        s.lock().heard(id, &job, toks);
+                    }
+                    None => s.lock().fail(
+                        id,
+                        Failure::Internal("cannot read the recording back from disk".into()),
+                    ),
+                }
             }
         });
         if panic::catch_unwind(job).is_err() {
@@ -591,13 +624,24 @@ fn plan(
     k: usize,
     id: u64,
     model: usize,
-    upload: Vec<u8>,
+    upload: Upload,
     task: Task,
 ) {
     let m = &s.models[model];
     let max = (s.config.max_seconds * m.rate as f64) as usize;
-    let samples = match audio::decode(upload, m.rate, max, s.config.ffmpeg.as_deref()) {
-        Ok(a) => Arc::new(a.samples),
+    let file = match upload {
+        Upload::File(f) => f,
+        Upload::Bytes(b) => match crate::scratch::of(&b) {
+            Ok(f) => f,
+            Err(e) => {
+                let why = format!("cannot write the upload to a scratch file: {e}");
+                s.lock().fail(id, Failure::Internal(why));
+                return;
+            }
+        },
+    };
+    let samples = match audio::decode(file, m.rate, max, s.config.ffmpeg.as_deref()) {
+        Ok(a) => Arc::new(a),
         Err(e) => {
             let f = match e {
                 AudioError::Unreadable(why) => Failure::Unreadable(why),
@@ -617,7 +661,7 @@ fn plan(
     };
     match task {
         Task::Speech => {
-            let segments = a.speech(&samples);
+            let segments = a.speech(&*samples);
             let mut st = s.lock();
             if let Some(r) = st.remove(id) {
                 let _ = r.tx.send(match segments {
@@ -625,15 +669,15 @@ fn plan(
                         samples: n,
                         segments,
                     },
-                    None => Event::Failed(Failure::Internal("out of memory".into())),
+                    None => Event::Failed(Failure::Internal(LOST.into())),
                 });
             }
         }
         Task::Transcribe(o) => {
             // Safety: the steps go into the request beside the samples they
-            // point into, and go before them (Request's field order); if the
+            // point at, and go before them (Request's field order); if the
             // request is gone, they go here, before the samples too.
-            let steps = unsafe { Steps::new(a, &samples, &o) };
+            let steps = unsafe { Steps::new(a, &*samples, &o) };
             let mut st = s.lock();
             let Some(r) = st.requests.get_mut(&id) else {
                 drop(steps);
@@ -642,7 +686,10 @@ fn plan(
             match steps {
                 None => st.fail(
                     id,
-                    Failure::Internal("out of memory, or max_chunk_s under a second".into()),
+                    Failure::Internal(
+                        "out of memory, the recording unreadable from disk, or max_chunk_s under a second"
+                            .into(),
+                    ),
                 ),
                 Some(steps) => {
                     let chunks = steps.chunks();
@@ -651,7 +698,7 @@ fn plan(
                         drop(steps);
                         st.remove(id);
                     } else if chunks == 0 {
-                        drop(steps); // before the samples it points into
+                        drop(steps); // before the samples it points at
                         r.samples = Some(samples);
                         st.done(id); // no speech: heard to its end
                     } else {
