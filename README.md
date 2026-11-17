@@ -50,6 +50,7 @@ README, "Then a model", makes them from NVIDIA's checkpoints.
 | `--max-requests N`   | most requests in progress (16); more get 503                                                           |
 | `--fast`             | up to 7% faster; transcripts may differ slightly                                                       |
 | `--ffmpeg PATH`      | ffmpeg 6.0 or later, for formats other than WAV and AIFF (none: those alone); see "Audio"              |
+| `--no-idle-release`  | hold the workers' buffers from the start and when idle; see "When the server is idle"                  |
 
 `RUST_LOG=debug` says more. At `info`, each request logs its audio, its
 time and its speed.
@@ -314,10 +315,19 @@ Once the server has held no request for 30 s (no upload coming, no work
 left), each worker frees its transcribers, joins their threads, and has
 glibc give back what was freed (`malloc_trim`). The next job makes them
 again. Making them again costs the next request little (below), so this is
-the default. `--no-idle-release` keeps them instead: where memory is shared
-and tight, as on a DGX Spark beside an LLM, the server then holds the same
-memory idle as busy, and a request after an idle spell doesn't take tens of
-MB more while a sibling process may have taken what was free.
+the default. `--no-idle-release` keeps them instead, and holds them from
+the start: each worker makes its transcribers as the server starts and
+hears 30.72 s of silence with each, since a buffer is the process's only
+once it is written, and the server does not start if memory or threads run
+out for one. Where memory is shared and tight, as on a DGX Spark beside an
+LLM, the server then holds nearly the same memory before its first request,
+idle and busy, and no request takes tens of MB more while a sibling process
+may have taken what was free. On a 9950X at `-t 16` (4 workers), v2, on
+2026-11-17: 181 MB (RssAnon) as it starts and 210 MB after four 60 s
+requests at once, the rest a request's own samples and chunks; without the
+warm-up the transcribers made at the start were 16 MB. By default the same
+server holds 6 MB as it starts, 205 MB after those requests and 24 MB once
+36 s have passed.
 
 On a Ryzen 7 7735HS (Zen 3+, 8 cores, laptop power settings), the v2
 model, on 2026-11-17: the server's own memory (RssAnon) after a 60 s
@@ -347,7 +357,7 @@ making them again added to the next request, a 25 s clip and a 60 s one
   for what it reads (most of 600 MB; slowest on an SD card). Their being
   dropped wasn't forced here: MADV_PAGEOUT from outside needs a capability
   this machine's user hasn't got.
-- Not yet measured on a 9950X or a Pi 5.
+- Not yet measured on a Pi 5; on a 9950X, memory alone (above).
 
 A request holds one of `--max-requests` slots from before its upload is read
 until it is done, so what the requests hold has a bound: about

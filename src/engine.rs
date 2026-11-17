@@ -152,6 +152,8 @@ struct State {
     took: Vec<Histogram>,
     /// When the last request went, or the engine began
     last: Option<Instant>,
+    /// Workers that have begun: with no idle release, their transcribers made
+    began: usize,
 }
 
 impl State {
@@ -446,12 +448,30 @@ impl Engine {
                     .expect("a worker thread")
             })
             .collect();
+        // each worker's transcribers are made, or not, before the engine is
+        // handed over: held_from_start says which
+        let mut st = shared.lock();
+        while st.began < each.len() {
+            st = shared
+                .ready
+                .wait(st)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        drop(st);
         Engine {
             shared,
             threads,
             workers: each.len(),
             worker_threads: each,
         }
+    }
+
+    /// With no idle release (Config's idle None): whether every worker made
+    /// a transcriber for every model at the start, so that no request will
+    /// take memory the server does not hold already. False where memory or
+    /// threads ran out; the caller then has no server to run.
+    pub fn held_from_start(&self) -> bool {
+        self.transcribers() == self.workers * self.shared.models.len()
     }
 
     pub fn models(&self) -> &[Arc<Model>] {
@@ -634,6 +654,25 @@ fn next(s: &Shared, asr: &mut [Option<Asr>], k: usize) -> Option<Work> {
 fn work(s: Arc<Shared>, k: usize) {
     let me = &s.workers[k];
     let mut asr: Vec<Option<Asr>> = s.models.iter().map(|_| None).collect();
+    // With no idle release the server holds from its start what it holds
+    // busy: every transcriber is made now, not when a first job needs it,
+    // and hears a chunk of the longest silence, since its buffers are the
+    // process's only once they are written (README, "When the server is
+    // idle": 16 MB made, 204 MB heard, at -t 16)
+    if s.config.idle.is_none() {
+        let longest = crate::ffi::transcribe_defaults().max_chunk_s;
+        for model in 0..s.models.len() {
+            let silence = vec![0f32; (longest * s.models[model].rate as f64) as usize];
+            let heard = transcriber(&mut asr, &s, k, model).and_then(|a| a.run(&silence));
+            if heard.is_none() {
+                release(&mut asr, &s, k); // held_from_start is then false
+                me.broken.store(true, Relaxed);
+                break;
+            }
+        }
+    }
+    s.lock().began += 1;
+    s.ready.notify_all();
     loop {
         let Some(w) = next(&s, &mut asr, k) else {
             return;

@@ -25,8 +25,8 @@ usage: pktito-server -m FILE.pkf [options]   serve OpenAI's speech-to-text API
       --max-requests N    requests at once (16); more get 503
       --fast              up to 7% faster; transcripts may differ slightly
       --ffmpeg PATH       ffmpeg 6.0 or later, for formats besides WAV and AIFF
-      --no-idle-release   keep the workers' buffers when idle (by default they
-                          go after 30 s with no request)
+      --no-idle-release   hold the workers' buffers from the start and when idle
+                          (by default they go after 30 s with no request)
   -V, --version           the version
 ";
 
@@ -144,6 +144,15 @@ fn main() -> ExitCode {
             idle: (!args.no_idle_release).then_some(IDLE),
         },
     );
+    if args.no_idle_release && !engine.held_from_start() {
+        eprintln!(
+            "pktito-server: --no-idle-release: out of memory or threads making every worker's \
+             transcriber ({workers} workers, {} model{})",
+            models.len(),
+            if models.len() == 1 { "" } else { "s" }
+        );
+        return ExitCode::FAILURE;
+    }
     let (backend, compiler) = ffi::backend();
     tracing::info!(
         "{}, {backend}, {compiler}{}",

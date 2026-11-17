@@ -391,6 +391,9 @@ fn with_no_idle_release_the_transcribers_stay() {
             idle: None,
         },
     );
+    // made at the start, a worker's each, before any request
+    assert!(engine.held_from_start());
+    assert_eq!(engine.transcribers(), 2);
     let rx = engine
         .submit(
             0,
@@ -400,7 +403,7 @@ fn with_no_idle_release_the_transcribers_stay() {
         .unwrap();
     answer(&m, false, rx);
     let held = engine.transcribers();
-    assert!(held > 0);
+    assert_eq!(held, 2);
     std::thread::sleep(Duration::from_secs(1));
     assert_eq!(engine.transcribers(), held, "held, with no idle release");
 }
