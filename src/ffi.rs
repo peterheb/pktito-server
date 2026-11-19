@@ -32,6 +32,8 @@ struct PkAudio {
     n: i64,
     read: Option<unsafe extern "C" fn(*mut c_void, i64, *mut f32, usize) -> c_int>,
     arg: *mut c_void,
+    /// for a recording still being read; a Source's length is known
+    wait: Option<unsafe extern "C" fn(*mut c_void, i64) -> i64>,
 }
 
 /// A recording at the model's rate, read a stretch at a time: what the
@@ -70,6 +72,7 @@ fn audio_of<S: Source>(x: &S) -> PkAudio {
         n: x.len() as i64,
         read: Some(source_read::<S>),
         arg: x as *const S as *mut c_void,
+        wait: None,
     }
 }
 
@@ -100,6 +103,8 @@ struct PkChunkOut {
     done: i64,
     total: i64,
     at_frame: i32,
+    /// 1 only of a recording still being read
+    provisional: c_int,
 }
 
 #[repr(C)]
@@ -221,6 +226,7 @@ extern "C" {
     fn pk_captions(
         w: *const PkCapword,
         n: usize,
+        speaker: *const i32,
         lang: *const c_char,
         media_end: i64,
         out: *mut PkCue,
@@ -230,6 +236,7 @@ extern "C" {
         m: *const PkModel,
         t: *const PkTok,
         n: usize,
+        speaker: *const i32,
         lang: *const c_char,
         done: c_int,
         out: *mut PkSentence,
@@ -417,6 +424,7 @@ impl Model {
                 self.ptr,
                 toks.as_ptr(),
                 toks.len(),
+                std::ptr::null(), // no speakers: the server runs no diarizer
                 lp,
                 done as c_int,
                 out.as_mut_ptr(),
@@ -593,6 +601,7 @@ impl Steps {
             done: 0,
             total: 0,
             at_frame: 0,
+            provisional: 0,
         };
         match unsafe { pk_steps_take(self.ptr, &mut c) } {
             1 => {
@@ -642,7 +651,16 @@ pub fn captions(
     let mut out = vec![PkCue::default(); w.len().max(1)];
     let lang = lang.map(|l| CString::new(l).unwrap_or_default());
     let lang = lang.as_ref().map_or(std::ptr::null(), |l| l.as_ptr());
-    let n = unsafe { pk_captions(w.as_ptr(), w.len(), lang, media_end, out.as_mut_ptr()) };
+    let n = unsafe {
+        pk_captions(
+            w.as_ptr(),
+            w.len(),
+            std::ptr::null(), // no speakers
+            lang,
+            media_end,
+            out.as_mut_ptr(),
+        )
+    };
     if n < 0 {
         return None;
     }

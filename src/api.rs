@@ -210,6 +210,8 @@ fn authorize(app: &Server, headers: &HeaderMap) -> Result<(), ApiError> {
 struct Form {
     /// The upload, in a scratch file (src/scratch.rs)
     file: Option<std::fs::File>,
+    /// Its name as the client gave it, for pktito_json's "file"
+    file_name: Option<String>,
     model: String,
     language: Option<String>,
     response_format: Option<String>,
@@ -240,12 +242,26 @@ fn language(s: &str) -> Option<String> {
     (!l.is_empty() && l != "auto").then(|| l.to_string())
 }
 
+/// An upload's name as pktito_json names its file: what follows the last
+/// separator of the name the client gave, as pktito-c names a path's file,
+/// and "-", pktito-c's name for stdin, where it gave none
+fn base_name(name: Option<&str>) -> String {
+    let base = name.unwrap_or_default().rsplit(['/', '\\']).next();
+    match base {
+        Some(b) if !b.is_empty() => b.to_string(),
+        _ => "-".to_string(),
+    }
+}
+
 async fn form(mut mp: Multipart) -> Result<Form, ApiError> {
     let mut f = Form::default();
     while let Some(field) = mp.next_field().await? {
         let name = field.name().unwrap_or_default().to_string();
         match name.as_str() {
-            "file" => f.file = Some(upload(field).await?),
+            "file" => {
+                f.file_name = field.file_name().map(str::to_string);
+                f.file = Some(upload(field).await?)
+            }
             "model" => f.model = field.text().await?.trim().to_string(),
             "language" => f.language = language(&field.text().await?),
             "response_format" => f.response_format = Some(field.text().await?.trim().to_string()),
@@ -431,6 +447,7 @@ async fn transcriptions(
             format!("timestamp_granularities {g}: word or segment"),
         ));
     }
+    let file_name = base_name(f.file_name.as_deref());
     let file = f.file.ok_or_else(|| ApiError::invalid("file", "no file"))?;
     let i = pick(&app, &f.model, f.language.as_deref())?;
     let m = app.engine.models()[i].clone();
@@ -455,6 +472,7 @@ async fn transcriptions(
     let t = Transcript {
         model: &m,
         fast: app.engine.fast(),
+        file: file_name,
         samples,
         chunks,
     };
@@ -488,7 +506,10 @@ async fn transcriptions(
         "verbose_json" => {
             Json(format::verbose_json(&t, segments, words).ok_or_else(no_memory)?).into_response()
         }
-        _ => plain("application/json", format::pktito_json(&t)),
+        _ => plain(
+            "application/json",
+            format::pktito_json(&t).ok_or_else(no_memory)?,
+        ),
     })
 }
 

@@ -16,9 +16,10 @@ $ curl -s -F file=@talk.wav localhost:8000/v1/audio/transcriptions
 
 ## Build
 
-It needs libpktito 0.9.7, whose core/pktito.h has the step-wise
+It needs libpktito 0.9.8, whose core/pktito.h has the step-wise
 transcription, `pk_steps`, over a recording read as a `pk_audio`, and
-`pk_sentences`:
+`pk_sentences` and `pk_captions` as they take a diarizer's speakers (the
+server gives none):
 
 ```sh
 cd libpktito && make libpktito.a
@@ -481,8 +482,13 @@ test.wav after them gave pktito-c's bytes.
   - A word is `word`, `start`, `end`.
   - Whisper's `avg_logprob`, `compression_ratio`, `no_speech_prob`, `seek`
     and `temperature` are left out: a transducer has nothing they measure.
-- `pktito_json` is pktito-c's `--json`, byte for byte: every chunk's start,
-  end, text, and its words and tokens with their times, then `meta`.
+- `pktito_json` is pktito-c's `--json`, the document `pktito/1`, byte for
+  byte: the file's name (the upload's, `-` where the client gave none), its
+  length, the model and the words' language; `segments`, the sentences,
+  each with its words; `captions`, the subtitles' cues with their lines;
+  and `chunks`, what the recording was cut into, each with its tokens.
+  Times are seconds to the millisecond. A word ends no later than its chunk
+  or the next word's start, here and in `srt`, `vtt` and `verbose_json`.
 
 **The other endpoints:**
 

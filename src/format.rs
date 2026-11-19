@@ -1,6 +1,7 @@
-//! The answers. pktito_json is pktito-c --json's, byte for byte, so that an
-//! answer here compares with the CLI's (tests/api.rs holds it to libpktito's
-//! tests/data/test.v2.json), and srt and vtt are pktito-c --srt's and
+//! The answers. pktito_json is pktito-c --json's document, pktito/1, byte
+//! for byte, so that an answer here compares with the CLI's (tests/api.rs
+//! holds it to libpktito's tests/data/test.v2.json), and srt and vtt are
+//! pktito-c --srt's and
 //! --vtt's: the same words, times, cues and characters. json, text and
 //! verbose_json are OpenAI's. Their text is the transcript's sentences
 //! (pk_sentences), the lines pktito-c prints, with a space between them;
@@ -36,6 +37,10 @@ pub struct Heard {
     pub tokens: Vec<Token>,
     /// Its tokens, frames counted from the recording's start
     pub toks: Vec<PkTok>,
+    /// Its own start in those frames (pk_chunk_out's at_frame)
+    pub at_frame: i32,
+    /// Each token's word's end, in seconds
+    pub wend: Vec<f64>,
 }
 
 /// A chunk as pktito-c prints it (core/cli.c, print_chunk), its times in
@@ -44,15 +49,34 @@ pub fn heard(m: &Model, c: &Chunk) -> Heard {
     let rate = m.rate as f64;
     let fs = m.frame_seconds;
     let start = c.at.start as f64 / rate;
-    let words = m
-        .words(&c.toks)
-        .iter()
-        .map(|w| Word {
-            text: m.word(&c.toks[w.tok as usize..(w.tok + w.ntok) as usize]),
-            start: start + w.start as f64 * fs,
-            end: start + w.end as f64 * fs,
-        })
-        .collect();
+    let stop = c.at.end as f64 / rate;
+    // A word ends at its last token's end, but no later than its chunk,
+    // nor than the next word's start, and no earlier than its own
+    // (core/cli.c, word_ends)
+    let found = m.words(&c.toks);
+    let mut wend = vec![0.0; c.toks.len()];
+    let mut words = Vec::with_capacity(found.len());
+    for (k, w) in found.iter().enumerate() {
+        let s = start + w.start as f64 * fs;
+        let mut e = start + w.end as f64 * fs;
+        if e > stop {
+            e = stop;
+        }
+        if let Some(next) = found.get(k + 1) {
+            let n = start + next.start as f64 * fs;
+            if e > n {
+                e = n;
+            }
+        }
+        let e = if e > s { e } else { s };
+        let toks = w.tok as usize..(w.tok + w.ntok) as usize;
+        wend[toks.clone()].fill(e);
+        words.push(Word {
+            text: m.word(&c.toks[toks]),
+            start: s,
+            end: e,
+        });
+    }
     let tokens = c
         .toks
         .iter()
@@ -73,12 +97,14 @@ pub fn heard(m: &Model, c: &Chunk) -> Heard {
         .collect();
     Heard {
         start,
-        end: c.at.end as f64 / rate,
+        end: stop,
         retried: c.retried,
         text: m.text(&c.toks),
         words,
         tokens,
         toks,
+        at_frame: c.at_frame,
+        wend,
     }
 }
 
@@ -86,6 +112,8 @@ pub fn heard(m: &Model, c: &Chunk) -> Heard {
 pub struct Transcript<'a> {
     pub model: &'a Model,
     pub fast: bool,
+    /// The upload's name, as the document names its file
+    pub file: String,
     /// Its length in the model's samples
     pub samples: usize,
     pub chunks: Vec<Heard>,
@@ -98,7 +126,10 @@ impl Transcript<'_> {
 
     /// Its sentences, its chunks given in order. None if memory runs out
     pub fn sentences(&self) -> Option<Vec<Sentence>> {
-        let mut s = Sentences::new(self.model);
+        self.sentences_with(Sentences::new(self.model))
+    }
+
+    fn sentences_with(&self, mut s: Sentences) -> Option<Vec<Sentence>> {
         let mut out = Vec::new();
         for c in &self.chunks {
             out.extend(s.add(self.model, c)?);
@@ -155,6 +186,9 @@ pub struct Sentences {
     tail: Vec<PkTok>,
     /// The first's place among the recording's tokens
     at: usize,
+    /// A sentence with no text is one too: the document's, where the
+    /// lines pktito-c prints leave it out
+    empty: bool,
 }
 
 impl Sentences {
@@ -164,6 +198,7 @@ impl Sentences {
             words: Vec::new(),
             tail: Vec::new(),
             at: 0,
+            empty: false,
         }
     }
 
@@ -188,7 +223,7 @@ impl Sentences {
         for s in &found {
             let r = s.first as usize..(s.first + s.n) as usize;
             let text = m.text(&self.tail[r.clone()]);
-            if !text.is_empty() {
+            if self.empty || !text.is_empty() {
                 out.push(Sentence {
                     toks: self.at + r.start..self.at + r.end,
                     text,
@@ -204,15 +239,9 @@ impl Sentences {
     }
 }
 
-/// printf's %.*f: Rust's {:.*} rounds a value's exact binary expansion to
-/// nearest, ties to even, as printf does in the default rounding mode; the
-/// test below holds it to the C library's snprintf.
-fn fixed(x: f64, places: usize) -> String {
-    format!("{x:.places$}")
-}
-
-/// pktito-c's json_str: '"' and '\' escaped, control characters as \u00XX,
-/// the rest as it is
+/// pktito-c's sb_str: '"', '\' and the control characters JSON names
+/// escaped by name, the other control characters as \u00XX, the rest as it
+/// is
 fn json_str(s: &mut String, t: &str) {
     s.push('"');
     for ch in t.chars() {
@@ -221,6 +250,11 @@ fn json_str(s: &mut String, t: &str) {
                 s.push('\\');
                 s.push(ch);
             }
+            '\n' => s.push_str("\\n"),
+            '\r' => s.push_str("\\r"),
+            '\t' => s.push_str("\\t"),
+            '\u{8}' => s.push_str("\\b"),
+            '\u{c}' => s.push_str("\\f"),
             c if (c as u32) < 0x20 => {
                 let _ = write!(s, "\\u{:04x}", c as u32);
             }
@@ -230,65 +264,187 @@ fn json_str(s: &mut String, t: &str) {
     s.push('"');
 }
 
-/// pktito-c --json of one file: its chunks, then its meta
-pub fn pktito_json(t: &Transcript) -> String {
-    let mut s = String::from("{\"chunks\": [");
-    for (i, c) in t.chunks.iter().enumerate() {
-        let _ = write!(
-            s,
-            "{}\n {{\"start\": {}, \"end\": {}, ",
-            if i > 0 { "," } else { "" },
-            fixed(c.start, 3),
-            fixed(c.end, 3)
-        );
-        if c.retried != 0 {
-            let _ = write!(s, "\"retried\": {}, ", c.retried);
-        }
-        s.push_str("\"text\": ");
-        json_str(&mut s, &c.text);
-        s.push_str(", \"words\": [");
-        for (k, w) in c.words.iter().enumerate() {
-            s.push_str(if k > 0 {
-                ", {\"word\": "
-            } else {
-                "{\"word\": "
-            });
-            json_str(&mut s, &w.text);
-            let _ = write!(
-                s,
-                ", \"start\": {}, \"end\": {}}}",
-                fixed(w.start, 2),
-                fixed(w.end, 2)
-            );
-        }
-        s.push_str("], \"tokens\": [");
-        for (k, tk) in c.tokens.iter().enumerate() {
-            let _ = write!(
-                s,
-                "{}{{\"id\": {}, \"piece\": ",
-                if k > 0 { ", " } else { "" },
-                tk.id
-            );
-            json_str(&mut s, &tk.piece);
-            let _ = write!(
-                s,
-                ", \"start\": {}, \"end\": {}}}",
-                fixed(tk.start, 2),
-                fixed(tk.end, 2)
-            );
-        }
-        s.push_str("]}");
+/// pktito-c's sb_time: seconds to the millisecond, in the fewest digits
+/// that read back the same ("60", "0.5", "21.793")
+fn time(s: &mut String, x: f64) {
+    let mut ms = (x * 1000.0).round() as i64;
+    if ms < 0 {
+        s.push('-');
+        ms = -ms;
     }
-    s.push_str("\n],\n \"meta\": {\"model\": ");
-    json_str(&mut s, &t.model.name);
-    s.push_str(if t.fast { ", \"fast\": true, " } else { ", " });
-    let _ = write!(s, "\"audio\": {}, \"language\": ", fixed(t.seconds(), 3));
+    let _ = write!(s, "{}", ms / 1000);
+    if ms % 1000 != 0 {
+        let d = format!(".{:03}", ms % 1000);
+        s.push_str(d.trim_end_matches('0'));
+    }
+}
+
+/// A recording's end in milliseconds, which no cue may pass, as pktito-c
+/// rounds it
+fn media_end(t: &Transcript) -> i64 {
+    (t.seconds() * 1000.0).round() as i64
+}
+
+/// pk_captions' cues of every word, with the words they count. None if
+/// memory runs out
+fn cues<'a>(t: &'a Transcript) -> Option<(Vec<ffi::PkCue>, Vec<&'a Word>)> {
+    let texts: Vec<CString> = t.words().map(|w| cstring(&w.text)).collect();
+    let times: Vec<(i64, i64)> = t
+        .words()
+        .map(|w| {
+            (
+                (w.start * 1000.0).round() as i64,
+                (w.end * 1000.0).round() as i64,
+            )
+        })
+        .collect();
+    let cues = ffi::captions(&texts, &times, t.language().as_deref(), media_end(t))?;
+    Some((cues, t.words().collect()))
+}
+
+/// pktito-c --json of one file (core/cli.c, json_doc), the document
+/// pktito/1: the file, the model, the words' language; the sentences, each
+/// with its words; the subtitles' cues, each with its lines; and the chunks
+/// the recording was cut into, each with its tokens. None if memory runs
+/// out.
+pub fn pktito_json(t: &Transcript) -> Option<String> {
+    let m = t.model;
+    let fs = m.frame_seconds;
+    let mut s = String::from("{\n  \"format\": \"pktito/1\",\n  \"file\": ");
+    json_str(&mut s, &t.file);
+    s.push_str(",\n  \"duration\": ");
+    time(&mut s, t.seconds());
+    s.push_str(",\n  \"model\": ");
+    json_str(&mut s, &m.name);
+    if t.fast {
+        s.push_str(",\n  \"fast\": true");
+    }
+    s.push_str(",\n  \"language\": ");
     match t.language() {
         Some(l) => json_str(&mut s, &l),
         None => s.push_str("null"),
     }
-    s.push_str("}}\n");
-    s
+
+    // every token of the recording, its chunk and its word's end
+    let toks: Vec<PkTok> = t
+        .chunks
+        .iter()
+        .flat_map(|c| c.toks.iter().copied())
+        .collect();
+    let of: Vec<(&Heard, f64)> = t
+        .chunks
+        .iter()
+        .flat_map(|c| c.wend.iter().map(move |&e| (c, e)))
+        .collect();
+    let mut all = Sentences::new(m);
+    all.empty = true;
+    let sentences = t.sentences_with(all)?;
+    s.push_str(",\n  \"segments\": [");
+    for (k, sent) in sentences.iter().enumerate() {
+        let tk = &toks[sent.toks.clone()];
+        let at = &of[sent.toks.clone()];
+        // a word's time is its chunk's start and its own frames past it
+        let start_of = |w: &ffi::PkWord| {
+            let c = at[w.tok as usize].0;
+            c.start + (w.start - c.at_frame) as f64 * fs
+        };
+        let words = m.words(tk);
+        let (start, end) = match (words.first(), words.last()) {
+            (Some(a), Some(z)) => (start_of(a), at[z.tok as usize].1),
+            _ => (0.0, 0.0),
+        };
+        s.push_str(if k > 0 { ",\n" } else { "\n" });
+        s.push_str("    {\"start\": ");
+        time(&mut s, start);
+        s.push_str(", \"end\": ");
+        time(&mut s, end);
+        s.push_str(", \"text\": ");
+        json_str(&mut s, &sent.text);
+        s.push_str(", \"words\": [\n");
+        for (i, w) in words.iter().enumerate() {
+            s.push_str(if i > 0 { ",\n" } else { "" });
+            s.push_str("      {\"word\": ");
+            json_str(
+                &mut s,
+                &m.word(&tk[w.tok as usize..(w.tok + w.ntok) as usize]),
+            );
+            s.push_str(", \"start\": ");
+            time(&mut s, start_of(w));
+            s.push_str(", \"end\": ");
+            time(&mut s, at[w.tok as usize].1);
+            s.push('}');
+        }
+        s.push_str("\n    ]}");
+    }
+    s.push_str(if sentences.is_empty() { "]" } else { "\n  ]" });
+
+    let (cues, words) = cues(t)?;
+    s.push_str(",\n  \"captions\": [");
+    for (k, cue) in cues.iter().enumerate() {
+        s.push_str(if k > 0 { ",\n" } else { "\n" });
+        s.push_str("    {\"start\": ");
+        time(&mut s, cue.start as f64 / 1000.0);
+        s.push_str(", \"end\": ");
+        time(&mut s, cue.end as f64 / 1000.0);
+        s.push_str(", \"lines\": [");
+        let mut line = String::new();
+        for i in cue.first..cue.first + cue.n {
+            if i > cue.first && i == cue.line2 {
+                json_str(&mut s, &line);
+                s.push_str(", ");
+                line.clear();
+            } else if i > cue.first {
+                line.push(' ');
+            }
+            line.push_str(&words[i as usize].text);
+        }
+        if cue.flags & PK_CUE_PAUSE != 0 {
+            line.push('\u{2026}');
+        }
+        json_str(&mut s, &line);
+        s.push_str("]}");
+    }
+    s.push_str(if cues.is_empty() { "]" } else { "\n  ]" });
+
+    let mut first_word = 0;
+    for (k, c) in t.chunks.iter().enumerate() {
+        s.push_str(if k > 0 { ",\n" } else { ",\n  \"chunks\": [\n" });
+        s.push_str("    {\"start\": ");
+        time(&mut s, c.start);
+        s.push_str(", \"end\": ");
+        time(&mut s, c.end);
+        s.push_str(", \"gap\": "); // the silence to the next
+        match t.chunks.get(k + 1) {
+            Some(next) => time(&mut s, next.start - c.end),
+            None => s.push_str("null"),
+        }
+        let _ = write!(
+            s,
+            ", \"first_word\": {first_word}, \"words\": {}",
+            c.words.len()
+        );
+        first_word += c.words.len();
+        if c.retried != 0 {
+            let _ = write!(s, ", \"retried\": {}", c.retried);
+        }
+        s.push_str(", \"tokens\": [");
+        for (i, tk) in c.tokens.iter().enumerate() {
+            s.push_str(if i > 0 { ", " } else { "" });
+            let _ = write!(s, "{{\"id\": {}, \"piece\": ", tk.id);
+            json_str(&mut s, &tk.piece);
+            s.push_str(", \"start\": ");
+            time(&mut s, tk.start);
+            s.push_str(", \"end\": ");
+            time(&mut s, tk.end);
+            s.push('}');
+        }
+        s.push_str("]}");
+    }
+    if !t.chunks.is_empty() {
+        s.push_str("\n  ]");
+    }
+    s.push_str("\n}\n");
+    Some(s)
 }
 
 fn sub_time(s: &mut String, ms: i64, sep: char) {
@@ -305,23 +461,7 @@ fn sub_time(s: &mut String, ms: i64, sep: char) {
 /// pktito-c --srt or --vtt: pk_captions' cues of every word. None if
 /// memory runs out.
 pub fn subtitles(t: &Transcript, vtt: bool) -> Option<String> {
-    let texts: Vec<CString> = t.words().map(|w| cstring(&w.text)).collect();
-    let times: Vec<(i64, i64)> = t
-        .words()
-        .map(|w| {
-            (
-                (w.start * 1000.0).round() as i64,
-                (w.end * 1000.0).round() as i64,
-            )
-        })
-        .collect();
-    let cues = ffi::captions(
-        &texts,
-        &times,
-        t.language().as_deref(),
-        t.samples as i64 * 1000 / t.model.rate as i64,
-    )?;
-    let words: Vec<&Word> = t.words().collect();
+    let (cues, words) = cues(t)?;
     let sep = if vtt { '.' } else { ',' };
     let mut s = String::from(if vtt { "WEBVTT\n\n" } else { "" });
     for (k, cue) in cues.iter().enumerate() {
@@ -432,7 +572,7 @@ pub fn verbose_json(t: &Transcript, segments: bool, words: bool) -> Option<Value
     if words {
         let ws: Vec<Value> = t
             .words()
-            .map(|w| json!({ "word": w.text, "start": round(w.start, 2), "end": round(w.end, 2) }))
+            .map(|w| json!({ "word": w.text, "start": round(w.start, 3), "end": round(w.end, 3) }))
             .collect();
         v["words"] = Value::Array(ws);
     }
@@ -443,57 +583,30 @@ pub fn verbose_json(t: &Transcript, segments: bool, words: bool) -> Option<Value
 mod tests {
     use super::*;
 
-    fn snprintf(x: f64, places: usize) -> String {
-        let mut buf = [0u8; 64];
-        let fmt = c"%.*f";
-        let n = unsafe {
-            libc::snprintf(
-                buf.as_mut_ptr() as *mut libc::c_char,
-                buf.len(),
-                fmt.as_ptr(),
-                places as libc::c_int,
-                x,
-            )
-        };
-        String::from_utf8(buf[..n as usize].to_vec()).unwrap()
-    }
-
-    /// fixed is the C library's %.*f: on the times a transcript has (a
-    /// sample count over the rate, plus frames of 0.08 s), on the ties a
-    /// binary fraction can hold, and on a million values of a generator
+    /// time is pktito-c's sb_time: llround of the milliseconds, a half
+    /// away from zero, and no zero left at the end
     #[test]
-    fn fixed_is_printf() {
-        let check = |x: f64| {
-            for places in [2, 3] {
-                assert_eq!(
-                    fixed(x, places),
-                    snprintf(x, places),
-                    "{x:e} to {places} places"
-                );
-            }
+    fn time_is_pktito_cs() {
+        let of = |x: f64| {
+            let mut s = String::new();
+            time(&mut s, x);
+            s
         };
-        for s in (0..16000 * 600).step_by(31) {
-            let start = s as f64 / 16000.0;
-            check(start);
-            check(start + (s % 997) as f64 * 0.08);
-        }
-        for k in 0..100000 {
-            check(k as f64 / 16.0);
-            check(k as f64 / 1024.0 + 0.0005);
-        }
-        let mut z = 0x9e3779b97f4a7c15u64;
-        for _ in 0..1_000_000 {
-            z ^= z << 13;
-            z ^= z >> 7;
-            z ^= z << 17;
-            check((z >> 11) as f64 / (1u64 << 53) as f64 * 1e4);
-        }
+        assert_eq!(of(60.0), "60");
+        assert_eq!(of(0.5), "0.5");
+        assert_eq!(of(21.793), "21.793");
+        assert_eq!(of(2.0004), "2");
+        assert_eq!(of(0.0625), "0.063"); // a tie, exact in binary: up
+        assert_eq!(of(1.9996), "2");
+        assert_eq!(of(0.01), "0.01");
+        assert_eq!(of(-0.25), "-0.25");
+        assert_eq!(of(0.0), "0");
     }
 
     #[test]
     fn json_str_is_pktito_cs() {
         let mut s = String::new();
-        json_str(&mut s, "a\"b\\c\n\u{1}\u{7f}é…");
-        assert_eq!(s, "\"a\\\"b\\\\c\\u000a\\u0001\u{7f}é…\"");
+        json_str(&mut s, "a\"b\\c\n\t\u{1}\u{7f}é…");
+        assert_eq!(s, "\"a\\\"b\\\\c\\n\\t\\u0001\u{7f}é…\"");
     }
 }

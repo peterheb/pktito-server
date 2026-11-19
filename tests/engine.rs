@@ -21,6 +21,7 @@ fn answer(m: &Model, fast: bool, mut rx: UnboundedReceiver<Event>) -> (String, I
     let mut t = Transcript {
         model: m,
         fast,
+        file: "test.wav".to_string(),
         samples: 0,
         chunks: Vec::new(),
     };
@@ -28,7 +29,7 @@ fn answer(m: &Model, fast: bool, mut rx: UnboundedReceiver<Event>) -> (String, I
         match rx.blocking_recv() {
             Some(Event::Planned { samples, .. }) => t.samples = samples,
             Some(Event::Chunk(c)) => t.chunks.push(format::heard(m, &c)),
-            Some(Event::Done) => return (format::pktito_json(&t), Instant::now()),
+            Some(Event::Done) => return (format::pktito_json(&t).unwrap(), Instant::now()),
             other => panic!("{other:?}"),
         }
     }
@@ -45,7 +46,10 @@ fn opts(max_chunk_s: f64) -> PkTranscribeOpts {
 fn requests_at_once_each_get_pktito_cs_answer() {
     let Some(m) = common::model("v2") else { return };
     // two minutes in chunks of 10 s at most: a dozen chunks or more a request
-    let long = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("test-twice.wav");
+    // named as answer() names every recording, since the document names its file
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("twice");
+    std::fs::create_dir_all(&dir).unwrap();
+    let long = dir.join("test.wav");
     std::fs::write(&long, common::test_wav_times(2)).unwrap();
     let path = common::model_path("v2");
     let want_long = String::from_utf8(common::cli(&[

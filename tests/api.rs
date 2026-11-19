@@ -175,7 +175,10 @@ fn stereo_22k(wav: &[u8]) -> Vec<u8> {
 async fn another_rate_and_two_channels_are_pktito_cs() {
     let Some(m) = common::model("v2") else { return };
     let wav = stereo_22k(&common::data("test.wav"));
-    let file = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("test-stereo-22k.wav");
+    // named as the upload is, since the document names its file
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("stereo-22k");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("test.wav");
     std::fs::write(&file, &wav).unwrap();
     let path = common::model_path("v2");
     let want = common::cli(&[
@@ -267,7 +270,7 @@ async fn openais_formats_carry_pktito_cs_text() {
     let segs = v["segments"].as_array().unwrap();
     let joined: Vec<&str> = segs.iter().map(|s| s["text"].as_str().unwrap()).collect();
     assert_eq!(joined.join(" "), text);
-    let words: Vec<&Value> = cli["chunks"]
+    let words: Vec<&Value> = cli["segments"]
         .as_array()
         .unwrap()
         .iter()
@@ -292,9 +295,10 @@ async fn openais_formats_carry_pktito_cs_text() {
     let got = v["words"].as_array().unwrap();
     assert_eq!(got.len(), words.len());
     for (g, w) in got.iter().zip(&words) {
+        // as numbers: the document writes a whole second as "42"
         assert_eq!(
-            (&g["word"], &g["start"], &g["end"]),
-            (&w["word"], &w["start"], &w["end"])
+            (&g["word"], time(&g["start"]), time(&g["end"])),
+            (&w["word"], time(&w["start"]), time(&w["end"]))
         );
     }
 
